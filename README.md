@@ -119,6 +119,7 @@ sudo reboot
 #### Installation
 
 ```bash
+cd /home/walle
 # Cloner et installer
 git clone https://github.com/walle-utbm/wall-e-vision.git
 cd wall-e-vision
