@@ -1,11 +1,11 @@
 # wall-e-vision
 
 Pipeline de vision temps reel pour detecter les dechets avec un modele YOLO fine-tune, puis les classer dans une categorie de tri:
-- yellow: recyclable (bac jaune)
-- glass: verre
-- other: autre dechet
+- **yellow**: recyclable (bac jaune)
+- **glass**: verre uniquement
+- **other**: autre dechet / poubelle residuelle
 
-Le code est volontairement decoupe en petits modules pour rester lisible et maintenable sur un systeme embarque (Raspberry Pi 4/5, 2 Go RAM).
+Le code est volontairement decoupe en petits modules pour rester lisible et maintenable sur un systeme embarque (Raspberry Pi 4/5, 8 Go RAM + IMX708).
 
 ## Structure du projet
 
@@ -62,26 +62,96 @@ Le JSONL est volontairement compact (uniquement les champs utiles au robot).
 
 ## Mapping des classes vers tri
 
-Le mapping des 28 classes est dans `src/walle_vision/labels.py`.
-Tu peux le modifier facilement si tes regles de tri evoluent.
+Le mapping des 14 classes est dans `src/walle_vision/labels.py`.
+
+### Classes support ees:
+
+| Classe | Tri |
+|--------|-----|
+| Plastic bottle | yellow |
+| Glass bottle | glass |
+| Cardboard | yellow |
+| Cup | other |
+| Paper bag | yellow |
+| Soft plastic | yellow |
+| Food Packet | other |
+| Paper | yellow |
+| Organic | other |
+| Metal | yellow |
+| Ramen Cup | other |
+| Printing industry | yellow |
+| Plastic bottle cap | yellow |
+| Straw | other |
+
+Tu peux facilement modifier les regles dans `src/walle_vision/labels.py` si tes donnees ou priorites changent.
 
 ## Installation (Windows, webcam PC)
 
-### Option A - conda (recommande)
-
 ```bash
+# Option A: conda (recommande)
 conda create -n walle-vision python=3.11 -y
 conda activate walle-vision
 pip install -r requirements.txt
-```
 
-### Option B - venv
-
-```bash
+# Option B: venv
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 ```
+
+### Raspberry Pi 4/5 (8GB RAM + IMX708)
+
+**Prerequis: Camera IMX708 connectée et libcamera configurée**
+
+#### Configuration IMX708 (ajouter dans /boot/config.txt)
+
+```ini
+# Décommenter/ajouter ces lignes:
+camera_auto_detect=0
+dtoverlay=imx708
+```
+
+Puis redémarrer:
+```bash
+sudo reboot
+```
+
+#### Installation
+
+```bash
+# Cloner et installer
+git clone https://github.com/walle-utbm/wall-e-vision.git
+cd wall-e-vision
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Test caméra:
+```bash
+# Verifier que libcamera voit la camera
+libcamera-hello --list-cameras
+```
+
+## Optimisation NCNN pour Raspberry Pi (Recommandé ⚡)
+
+Pour **4x plus rapide** sur ARM, convertissez votre modèle en NCNN:
+
+```bash
+# Etape 1: Installer OpenVINO (requis une seule fois)
+pip install openvino-dev
+
+# Etape 2: Convertir .pt -> NCNN (.param + .bin)
+python convert_to_ncnn.py --model model/best.pt --output model/
+
+# Résultat:
+# model/best.ncnn.param  (~100KB)
+# model/best.ncnn.bin    (~30MB)
+```
+
+Le code détecte automatiquement et utilise NCNN s'il est disponible!
+
+**Voir [NCNN_CONVERSION.md](NCNN_CONVERSION.md) pour détails complets**
 
 ## Lancement
 
@@ -91,32 +161,97 @@ Depuis la racine du projet:
 python src/main.py
 ```
 
-Cette commande lance un profil unique adapte Raspberry Pi 2 Go.
+Cette commande lance un profil unique **optimisé pour Raspberry Pi 8GB + IMX708**.
 Il n'y a plus de mode arguments pour simplifier l'utilisation.
-Pour modifier les reglages, edite `PiRuntimeConfig` dans `src/walle_vision/cli.py`.
+
+### Configuration rapide
+
+Pour modifier les reglages (fps, resolution, confiance, etc.), edite `PiRuntimeConfig` dans [src/walle_vision/cli.py](src/walle_vision/cli.py):
+
+```python
+@dataclass(slots=True)
+class PiRuntimeConfig:
+    model: str = "model/best.pt"          # chemin du modele
+    source: str = "0"                      # 0 pour camera IMX708, path pour video
+    conf: float = 0.30                     # seuil confiance (0.30 = equilibre bon)
+    imgsz: int = 640                       # taille inference (640 = training resolution)
+    infer_every: int = 1                   # inference a chaque frame (1 pour 8GB)
+    width: int = 640                       # resolution camera (640 = training)
+    height: int = 640
+    fps: int = 30                          # frames par seconde (30 smooth real-time)
+    show: bool = False                     # afficher debug (False on RPi headless)
+    half: bool = True                      # FP16 pour GPU acceleration
+```
+
+### Sorties
+
+Apres chaque run, tu obtiens:
+- **outputs/frames/** - images annotees avec boxes detectees
+- **outputs/detections.jsonl** - journal structure avec tous les detections stables
+
+Format JSONL exemple:
+```json
+{"frame_index": 0, "timestamp": 123.456, "detections": [
+  {"class_id": 0, "class_name": "Plastic bottle", "recycle_bin": "yellow", "confidence": 0.95, 
+   "bbox_xyxy": [100, 200, 150, 250], "pickup_xy": [125, 225], "track_id": 1}
+]}
+```
 
 ## Role Des Fichiers
 
-- `src/main.py`: point d'entree executable
-- `src/walle_vision/cli.py`: profil unique Raspberry Pi (sans args)
-- `src/walle_vision/camera.py`: lecture flux camera/video
-- `src/walle_vision/detector.py`: inference YOLO + calcul `pickup_xy`
-- `src/walle_vision/tracking.py`: stabilisation temporelle des detections
-- `src/walle_vision/pipeline.py`: orchestration globale capture -> infer -> export
-- `src/walle_vision/visualization.py`: dessin des boxes et points de prise
-- `src/walle_vision/types.py`: structures de donnees communes
-- `src/walle_vision/labels.py`: classes du modele + mapping de tri
-- `src/walle_vision/sorting.py`: fonction de mapping classe -> bac
+- [src/main.py](src/main.py) - point d'entree executable (lance cli.run())
+- [src/walle_vision/cli.py](src/walle_vision/cli.py) - profil unique Raspberry Pi (sans args CLI)
+- [src/walle_vision/camera.py](src/walle_vision/camera.py) - lecture flux camera (OpenCV + ArduCAM)
+- [src/walle_vision/detector.py](src/walle_vision/detector.py) - inference YOLO + calcul pickup_xy
+- [src/walle_vision/tracking.py](src/walle_vision/tracking.py) - stabilisation temporelle (IoU-based)
+- [src/walle_vision/pipeline.py](src/walle_vision/pipeline.py) - orchestration capture -> infer -> export
+- [src/walle_vision/visualization.py](src/walle_vision/visualization.py) - rendu boxes + point prise
+- [src/walle_vision/types.py](src/walle_vision/types.py) - structures donnees shared
+- [src/walle_vision/labels.py](src/walle_vision/labels.py) - 14 classes + mapping tri
+- [src/walle_vision/sorting.py](src/walle_vision/sorting.py) - fonction map classe->bac
 
-## Notes optimisation Raspberry Pi 4/5 (2 Go)
+## Notes optimisation Raspberry Pi 4/5 (8GB + IMX708)
 
-- le profil par defaut est regle en `640x640` pour rester aligne avec l'entrainement
-- l'inference est decimee (`infer_every=3`) pour contenir la charge CPU
-- le JSON de sortie est compact et ecrit uniquement lors de detections stables
-- le debug visuel est desactive par defaut (`show=False`)
-- la camera applique un verrouillage best-effort de certains automatismes (focus/exposition/WB)
+### Profil par defaut:
+- Resolution: **640×640** (= training resolution) → meilleure precision
+- FPS camera: **30** (smooth real-time) → moins de latence
+- Inference: **chaque frame** (infer_every=1) → CPU peut tenir sur 8GB
+- Confiance minimale: **0.30** → bon equilibre precision/recall
+- Tracking confirmation: **3 frames** → plus stable
+- **FP16 active** → 2x plus rapide si GPU disponible
+- **workers=0** → evite crash DataLoader sur RPi/Windows
 
-## Docker
+### IMX708 specifics:
+- V4L2 backend pour stabilite libcamera
+- Buffer limite a 1 frame → low-latency
+- Autofocus desactive → detections plus coherentes
+- Config /boot/config.txt: `camera_auto_detect=0` + `dtoverlay=imx708`
 
-Non ajoute volontairement pour garder le projet simple et leger.
-Le script est directement utilisable via environnement Python/conda.
+### Tuning selon tes besoins:
+
+### Tuning selon tes besoins:
+
+**Si tu veux PLUS de precision (meilleur recall):**
+```python
+conf: float = 0.25                    # detecte plus de petits objets
+infer_every: int = 1                  # inference a chaque frame
+track_window: int = 7                 # lissage plus long
+imgsz: int = 416                      # augmenter taille (vs 640)
+```
+
+**Si tu veux PLUS de vitesse (moins de load CPU):**
+```python
+conf: float = 0.40                    # ignore petits/bruit detections  
+infer_every: int = 2                  # saute frames
+save_every: int = 10                  # moins d'I/O disque
+```
+
+## Dependances
+
+- `ultralytics>=8.3.0` - YOLO inference
+- `opencv-python>=4.10` - camera + visualisation
+- `numpy>=2.0` - data structures
+
+Optional:
+- `torch` - CPU pre-built pour RPi si besoin acceleration
+

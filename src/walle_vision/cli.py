@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Single-entry runtime configuration for Raspberry Pi (2 GB RAM).
+"""Single-entry runtime configuration for Raspberry Pi (8 GB RAM + IMX708).
 
 This module intentionally removes command-line tuning complexity.
 Run `python src/main.py` and the application starts with one curated profile.
@@ -16,54 +16,57 @@ from .pipeline import VisionPipeline
 
 @dataclass(slots=True)
 class PiRuntimeConfig:
-    """Fixed runtime profile optimized for a low-memory Raspberry Pi.
+    """Fixed runtime profile optimized for Raspberry Pi 8GB + IMX708 camera.
+
+    Inference resolution matches training geometry (640×640) for best accuracy.
+    Optimized for real-time performance on RPi 4/5 with 8GB RAM.
 
     Attributes:
-        model: Path to model weights.
-        source: Camera index as string (converted to int when numeric).
-        output_dir: Folder for detections and saved frames.
-        conf: Detection confidence threshold.
-        iou: NMS IoU threshold.
-        imgsz: Inference size. 640 matches training geometry for better precision.
-        max_det: Maximum detections per frame.
-        width: Camera capture width.
-        height: Camera capture height.
-        fps: Requested camera FPS.
-        infer_every: Run inference every N frames.
-        save_every: Save one annotated image every N stable detections.
-        track_iou: IoU threshold for temporal association.
-        confirm_frames: Minimum matched frames before confirming object.
-        max_missed: Allowed missed frames before dropping a track.
-        track_window: Number of recent confidences for smoothing.
-        display_persist: Frames to keep last confirmed box on display.
-        show: Enable OpenCV window (typically False on Raspberry Pi).
-        half: Use FP16 when supported.
+        model: Path to YOLO model weights.
+        source: Camera index as string (0 for IMX708 on RPi, or path for video).
+        output_dir: Output folder for detections.jsonl and frames/.
+        conf: Detection confidence threshold (0.30 = good balance precision/recall).
+        iou: NMS IoU threshold for duplicate suppression.
+        imgsz: Inference size (640 = training geometry for best accuracy).
+        max_det: Maximum detections per frame (8 is reasonable for waste bins).
+        width: Camera capture width (640 matches model training).
+        height: Camera capture height (640 matches model training).
+        fps: Camera FPS (30 for smooth real-time on 8GB).
+        infer_every: Run inference every N frames (1=every frame, 2=skip one).
+        save_every: Save annotated frame every N stable detections.
+        track_iou: IoU threshold for temporal track association.
+        confirm_frames: Frames needed to confirm a track (3 = more stable).
+        max_missed: Frames to keep track before dropping it.
+        track_window: Frames for confidence smoothing.
+        display_persist: Frames to persist visualization of detection.
+        show: Enable OpenCV window display (False for headless RPi).
+        half: Use FP16 inference when GPU available (faster on RPi).
     """
 
     model: str = "model/best.pt"
     source: str = "0"
     output_dir: str = "outputs"
 
-    conf: float = 0.25
+    conf: float = 0.30
     iou: float = 0.45
     imgsz: int = 640
-    max_det: int = 6
+    max_det: int = 8
 
     width: int = 640
     height: int = 640
-    fps: int = 25
+    fps: int = 30
 
-    infer_every: int = 3
-    save_every: int = 4
+    infer_every: int = 1
+    save_every: int = 5
 
-    track_iou: float = 0.3
+    track_iou: float = 0.35
     confirm_frames: int = 3
     max_missed: int = 2
     track_window: int = 5
     display_persist: int = 5
 
     show: bool = False
-    half: bool = False
+    half: bool = True
 
 
 def _parse_source(source: str) -> int | str:

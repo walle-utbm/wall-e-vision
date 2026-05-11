@@ -4,9 +4,13 @@ from __future__ import annotations
 
 This module encapsulates model loading and raw prediction decoding. It exposes
 normalized `Detection` objects used by the rest of the pipeline.
+
+Supports both PyTorch (.pt) and NCNN (.param/.bin) formats.
+NCNN is recommended for Raspberry Pi ARM inference (much faster, lower memory).
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List
 
 import cv2
@@ -21,41 +25,111 @@ from .types import Detection
 class DetectorConfig:
     """Inference parameters for `WasteDetector`.
 
+    Optimized for Raspberry Pi 8GB with IMX708 camera.
+    Supports both NCNN (.param/.bin) and PyTorch (.pt) model formats.
+    NCNN is recommended for 2-4x faster inference on ARM.
+
     Attributes:
-        model_path: Path to YOLO weights file (.pt).
-        conf_threshold: Minimum confidence score kept after inference.
-        iou_threshold: NMS IoU threshold.
-        image_size: Inference input size (typically 640 for your model).
+        model_path: Path to model file:
+                   - .pt file (PyTorch, requires ultralytics)
+                   - .ncnn.param file (NCNN, fastest on ARM Raspberry Pi)
+        conf_threshold: Minimum confidence score kept after inference (0.0-1.0).
+        iou_threshold: NMS IoU threshold for duplicate removal (0.0-1.0).
+        image_size: Inference input size (640 matches training geometry).
         max_detections: Maximum detections returned per frame.
         use_half: Request FP16 when supported by hardware/runtime.
+        device: Device to use ('cpu' for RPi, '0' for GPU if available).
+        workers: DataLoader workers (0 for RPi/Windows to avoid spawn issues).
     """
 
     model_path: str
-    conf_threshold: float = 0.25
+    conf_threshold: float = 0.30
     iou_threshold: float = 0.45
     image_size: int = 640
-    max_detections: int = 10
-    use_half: bool = False
+    max_detections: int = 8
+    use_half: bool = True
+    device: str = "cpu"
+    workers: int = 0
 
 
 class WasteDetector:
-    """High-level detector that converts YOLO results to project `Detection` objects."""
+    """High-level detector that converts YOLO results to project `Detection` objects.
+    
+    Optimized for Raspberry Pi inference with memory-efficient settings.
+    Supports both NCNN (.param/.bin - recommended for ARM) and PyTorch (.pt) formats.
+    """
 
     def __init__(self, cfg: DetectorConfig) -> None:
-        """Load YOLO model once and keep it in memory for real-time use."""
+        """Load YOLO model once and keep it in memory for real-time use.
+        
+        Automatically detects model format:
+        - If .ncnn.param exists, uses NCNN (fastest on ARM)
+        - Otherwise, loads .pt file with PyTorch
+        """
         self.cfg = cfg
-        self.model = YOLO(cfg.model_path)
-        # fuse() can slightly reduce inference overhead on CPU/GPU.
-        try:
-            self.model.fuse()
-        except Exception:
-            pass
+        model_path = Path(cfg.model_path)
+        
+        # Try to find NCNN model first (much faster on ARM)
+        ncnn_param = self._find_ncnn_model(model_path)
+        if ncnn_param:
+            print(f"Loading NCNN model: {ncnn_param}")
+            self.model = YOLO(str(ncnn_param))
+            self.model_format = "ncnn"
+        else:
+            # Fallback to PyTorch
+            if not model_path.exists():
+                raise FileNotFoundError(f"Model not found: {model_path}")
+            print(f"Loading PyTorch model: {model_path}")
+            self.model = YOLO(str(model_path))
+            self.model_format = "pt"
+            
+            # fuse() can reduce inference overhead on CPU/GPU (PT only)
+            try:
+                self.model.fuse()
+            except Exception:
+                pass
+    
+    def _find_ncnn_model(self, model_path: Path) -> Path | None:
+        """Look for NCNN model (.ncnn.param) in the same directory or in a subdirectory.
+        
+        Args:
+            model_path: Path to .pt model (e.g., model/best.pt)
+            
+        Returns:
+            Path to .ncnn.param file if found, None otherwise.
+        """
+        if not model_path.exists():
+            return None
+            
+        # Check if NCNN files exist in same directory
+        stem = model_path.stem  # "best" from "best.pt"
+        parent = model_path.parent
+        
+        # Try direct path: model/best.ncnn.param
+        ncnn_param = parent / f"{stem}.ncnn.param"
+        ncnn_bin = parent / f"{stem}.ncnn.bin"
+        
+        if ncnn_param.exists() and ncnn_bin.exists():
+            return ncnn_param
+        
+        # Try subdirectory path: model/best_ncnn_model/model.ncnn.param
+        # (created by ultralytics export)
+        ncnn_subdir = parent / f"{stem}_ncnn_model"
+        ncnn_param_sub = ncnn_subdir / "model.ncnn.param"
+        ncnn_bin_sub = ncnn_subdir / "model.ncnn.bin"
+        
+        if ncnn_param_sub.exists() and ncnn_bin_sub.exists():
+            return ncnn_param_sub
+        
+        return None
 
     def infer(self, frame: np.ndarray) -> List[Detection]:
         """Run inference on one frame and return decoded detections.
 
         If segmentation masks are available, pickup point uses mask centroid.
         Otherwise, pickup point falls back to bounding-box center.
+        
+        Optimized for Raspberry Pi with minimal memory footprint.
         """
         results = self.model.predict(
             source=frame,
@@ -64,8 +138,9 @@ class WasteDetector:
             imgsz=self.cfg.image_size,
             max_det=self.cfg.max_detections,
             half=self.cfg.use_half,
-            device="cpu",
+            device=self.cfg.device,
             verbose=False,
+            workers=self.cfg.workers,
         )
 
         if not results:

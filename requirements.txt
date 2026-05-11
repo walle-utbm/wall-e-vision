@@ -1,3 +1,15 @@
+# Core dependencies optimized for Raspberry Pi
 ultralytics==8.3.31
 opencv-python==4.10.0.84
 numpy==2.1.3
+
+# Optional: For NCNN model conversion (export .pt to NCNN)
+# Required for: python convert_to_ncnn.py
+# openvino-dev>=2024.0  # For NCNN export (Windows/Linux)
+# openvino-dev[caffe,onnx]>=2024.0  # With additional converters
+
+# Optional: For ArduCAM support (uncomment if using ArduCAM)
+# picamera2>=0.3.0  # Raspberry Pi camera library
+
+# Optional: For better Raspberry Pi performance
+# torch==2.0.1  # CPU-only, pre-built for ARM
