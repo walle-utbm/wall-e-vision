@@ -54,7 +54,7 @@ Le pipeline ne publie que les detections stables: un objet doit etre vu plusieur
 Si le modele est un modele de segmentation YOLO, `pickup_xy` est calcule sur le centroide du masque. Sinon, le code bascule automatiquement sur le centre de la bounding box.
 
 Et en sortie:
-- images annotees avec bounding boxes dans `outputs/frames/`
+- images annotees avec bounding boxes dans `outputs/predict/`
 - journal structure JSONL dans `outputs/detections.jsonl`
 
 Seules les frames contenant au moins une detection stable sont enregistrees sur disque (images et JSONL).
@@ -125,10 +125,15 @@ cd wall-e-vision
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+# Si tu utilises la camera CSI IMX708, installer aussi picamera2 si besoin
+pip install picamera2
+# Sur Raspberry Pi OS, installer aussi les bindings systeme libcamera
+sudo apt install python3-libcamera python3-picamera2 -y
 ```
 
 Test caméra:
 ```bash
+sudo apt install libcamera-apps -y
 # Verifier que libcamera voit la camera
 libcamera-hello --list-cameras
 ```
@@ -149,7 +154,7 @@ python convert_to_ncnn.py --model model/best.pt --output model/
 # model/best.ncnn.bin    (~30MB)
 ```
 
-Le code détecte automatiquement et utilise NCNN s'il est disponible!
+Le code détecte automatiquement et utilise NCNN s'il est disponible. Sur Raspberry Pi ARM64, l'inférence passe désormais par le runtime NCNN natif du fichier exporté `best_ncnn_model/`.
 
 **Voir [NCNN_CONVERSION.md](NCNN_CONVERSION.md) pour détails complets**
 
@@ -186,7 +191,7 @@ class PiRuntimeConfig:
 ### Sorties
 
 Apres chaque run, tu obtiens:
-- **outputs/frames/** - images annotees avec boxes detectees
+- **outputs/predict/** - images annotees avec boxes detectees
 - **outputs/detections.jsonl** - journal structure avec tous les detections stables
 
 Format JSONL exemple:

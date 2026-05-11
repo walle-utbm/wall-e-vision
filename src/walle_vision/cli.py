@@ -41,13 +41,16 @@ class PiRuntimeConfig:
         display_persist: Frames to persist visualization of detection.
         show: Enable OpenCV window display (False for headless RPi).
         half: Use FP16 inference when GPU available (faster on RPi).
+        camera_test_mode: Save raw camera frames periodically for SSH verification.
+        camera_test_interval_sec: Interval in seconds between camera test frame saves.
+        force_pytorch: Force PyTorch inference, skip NCNN for debugging (default False).
     """
 
     model: str = "model/best.pt"
     source: str = "0"
     output_dir: str = "outputs"
 
-    conf: float = 0.30
+    conf: float = 0.10
     iou: float = 0.45
     imgsz: int = 640
     max_det: int = 8
@@ -67,7 +70,9 @@ class PiRuntimeConfig:
 
     show: bool = False
     half: bool = True
-
+    camera_test_mode: bool = False
+    camera_test_interval_sec: float = 5.0    
+    force_pytorch: bool = False
 
 def _parse_source(source: str) -> int | str:
     """Convert camera source to int when numeric, else keep string path/url."""
@@ -89,6 +94,7 @@ def run() -> None:
         image_size=cfg.imgsz,
         max_detections=cfg.max_det,
         use_half=cfg.half,
+        force_pytorch=cfg.force_pytorch,
     )
 
     pipeline = VisionPipeline(
@@ -106,5 +112,7 @@ def run() -> None:
         width=cfg.width,
         height=cfg.height,
         fps=cfg.fps,
+        camera_test_mode=cfg.camera_test_mode,
+        camera_test_interval_sec=cfg.camera_test_interval_sec,
     )
     pipeline.run()

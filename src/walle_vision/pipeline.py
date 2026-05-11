@@ -43,6 +43,8 @@ class VisionPipeline:
         width: int,
         height: int,
         fps: int,
+        camera_test_mode: bool = False,
+        camera_test_interval_sec: float = 5.0,
     ) -> None:
         self.detector = WasteDetector(detector_cfg)
         self.tracker = TemporalDetectionTracker(
@@ -63,11 +65,19 @@ class VisionPipeline:
         self._display_persist_frames = max(0, display_persist_frames)
         self._display_cache: dict[int, tuple[int, Detection]] = {}
         self._last_rendered_frame = None
+        self.camera_test_mode = camera_test_mode
+        self.camera_test_interval_sec = camera_test_interval_sec
+        self._last_test_frame_save_time = 0.0
+        self._proc_count = 0
+        self._proc_start_time = 0.0
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.results_jsonl = self.output_dir / "detections.jsonl"
-        self.frames_dir = self.output_dir / "frames"
-        self.frames_dir.mkdir(parents=True, exist_ok=True)
+        self.predict_dir = self.output_dir / "predict"
+        self.predict_dir.mkdir(parents=True, exist_ok=True)
+        self.camera_test_dir = self.output_dir / "camera_test"
+        if self.camera_test_mode:
+            self.camera_test_dir.mkdir(parents=True, exist_ok=True)
 
     def run(self) -> None:
         """Execute real-time loop using threaded capture and bounded queue."""
@@ -106,6 +116,12 @@ class VisionPipeline:
                             stop_event.set()
                     continue
 
+                if self.camera_test_mode and timestamp - self._last_test_frame_save_time >= self.camera_test_interval_sec:
+                    test_frame_path = self.camera_test_dir / f"frame_{int(timestamp)}.jpg"
+                    cv2.imwrite(str(test_frame_path), frame)
+                    self._last_test_frame_save_time = timestamp
+                    print(f"📷 Camera test frame saved: {test_frame_path.name}")
+
                 if frame_index % self.infer_every_n_frames != 0:
                     if self.show:
                         display_frame = self._last_rendered_frame if self._last_rendered_frame is not None else frame
@@ -126,10 +142,21 @@ class VisionPipeline:
                 self._last_rendered_frame = annotated
 
                 if stable_detections:
+                    # always save annotated frame for inspection
                     self._detected_frame_count += 1
-                    if self._detected_frame_count % self.save_every_n_frames == 0:
-                        out_file = self.frames_dir / f"frame_{frame_index:06d}.jpg"
-                        cv2.imwrite(str(out_file), annotated)
+                    out_file = self.predict_dir / f"frame_{frame_index:06d}.jpg"
+                    cv2.imwrite(str(out_file), annotated)
+
+                # FPS logging: count processed frames (inference steps)
+                if self._proc_start_time == 0.0:
+                    self._proc_start_time = timestamp
+                self._proc_count += 1
+                elapsed = timestamp - self._proc_start_time
+                if elapsed >= 5.0:
+                    fps = float(self._proc_count) / max(1e-6, elapsed)
+                    print(f"ℹ️ Pipeline processed {self._proc_count} frames in {elapsed:.1f}s (~{fps:.2f} FPS)")
+                    self._proc_start_time = timestamp
+                    self._proc_count = 0
 
                 if self.show:
                     cv2.imshow("wall-e-vision", annotated)
