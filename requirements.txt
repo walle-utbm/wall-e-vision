@@ -1,17 +1,11 @@
-# Core dependencies optimized for Raspberry Pi
+# Core dependencies optimized for RubikPi 3 (Snapdragon 8 Gen1)
 ultralytics==8.4
 opencv-python-headless
 numpy==2.4.4
-ncnn>=1.0.20260114
 
-# Optional: For NCNN model conversion (export .pt to NCNN)
-# Required for: python convert_to_ncnn.py
-# openvino-dev>=2024.0  # For NCNN export (Windows/Linux)
-# openvino-dev[caffe,onnx]>=2024.0  # With additional converters
-
-# Optional: For ArduCAM support (uncomment if using ArduCAM)
+# Optional: For ArduCAM/IMX708 support
 picamera2>=0.3.0  # Raspberry Pi camera library
 
-# Optional: For better Raspberry Pi performance
-# Use the system package on Raspberry Pi OS:
-# sudo apt install python3-torch python3-torchvision -y
+# Note: NCNN is not needed for RubikPi (CPU is fast enough with PyTorch)
+# If deploying to Raspberry Pi 4/5, add ncnn>=1.0.20260114 and uncomment below:
+# ncnn>=1.0.20260114

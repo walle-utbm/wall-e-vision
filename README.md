@@ -5,7 +5,20 @@ Pipeline de vision temps reel pour detecter les dechets avec un modele YOLO fine
 - **glass**: verre uniquement
 - **other**: autre dechet / poubelle residuelle
 
-Le code est volontairement decoupe en petits modules pour rester lisible et maintenable sur un systeme embarque (Raspberry Pi 4/5, 8 Go RAM + IMX708).
+Le code est optimise pour deux plateforme embarquees avec camera IMX708 et CPU ARM64:
+
+## Choix de la branche
+
+| Plateforme | Branche | Setup |
+|---|---|---|
+| **Raspberry Pi 4/5** (Broadcom, 4 cores @ 1.5 GHz) | `main` | [README.md](README.md) |
+| **RubikPi 3** (Qualcomm, 8 cores @ 2.7 GHz) | `rubikpi3` | [RUBIKPI_SETUP.md](RUBIKPI_SETUP.md) |
+
+### Auto-détection
+Le script détecte automatiquement la plateforme et charge le profil adéquat.
+Pour le forcer manuellement avec: `WALLE_PLATFORM=rubik_pi`
+
+---
 
 ## Structure du projet
 

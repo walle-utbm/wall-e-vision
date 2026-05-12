@@ -54,22 +54,18 @@ from .types import Detection
 class DetectorConfig:
     """Inference parameters for `WasteDetector`.
 
-    Optimized for Raspberry Pi 8GB with IMX708 camera.
-    Supports both NCNN (.param/.bin) and PyTorch (.pt) model formats.
-    NCNN is recommended for 2-4x faster inference on ARM.
+    Optimized for RubikPi 3 (Snapdragon 8 Gen1) with PyTorch inference.
+    No NCNN needed—CPU is powerful enough.
 
     Attributes:
-        model_path: Path to model file:
-                   - .pt file (PyTorch, requires ultralytics)
-                   - .ncnn.param file (NCNN, fastest on ARM Raspberry Pi)
+        model_path: Path to .pt model file (PyTorch format).
         conf_threshold: Minimum confidence score kept after inference (0.0-1.0).
         iou_threshold: NMS IoU threshold for duplicate removal (0.0-1.0).
-        image_size: Inference input size (640 matches training geometry).
+        image_size: Inference input size (768 for RubikPi, 640 for RPi4).
         max_detections: Maximum detections returned per frame.
-        use_half: Request FP16 when supported by hardware/runtime.
-        device: Device to use ('cpu' for RPi, '0' for GPU if available).
-        workers: DataLoader workers (0 for RPi/Windows to avoid spawn issues).
-        force_pytorch: Force PyTorch inference, skip NCNN even if available.
+        use_half: Request FP16 when supported by CPU.
+        device: Device to use ('cpu' for RubikPi).
+        workers: DataLoader workers (0 to avoid spawn issues on ARM).
     """
 
     model_path: str
@@ -80,29 +76,21 @@ class DetectorConfig:
     use_half: bool = True
     device: str = "cpu"
     workers: int = 0
-    force_pytorch: bool = False
     box_scale: float = 1.0
 
 
 class WasteDetector:
     """High-level detector that converts YOLO results to project `Detection` objects.
     
-    Optimized for Raspberry Pi inference with memory-efficient settings.
-    Supports both NCNN (.param/.bin - recommended for ARM) and PyTorch (.pt) formats.
+    Optimized for RubikPi 3 (Snapdragon 8 Gen1) with PyTorch on powerful ARM CPU.
     """
 
     def __init__(self, cfg: DetectorConfig) -> None:
-        """Load YOLO model once and keep it in memory for real-time use.
-        
-        Automatically detects model format:
-        - If .ncnn.param exists, uses NCNN (fastest on ARM)
-        - Otherwise, loads .pt file with PyTorch
-        """
+        """Load PyTorch YOLO model once and keep in memory for real-time use."""
         self.cfg = cfg
         model_path = Path(cfg.model_path)
         self._arm64 = platform.machine().lower() in {"aarch64", "arm64"}
         self.class_names: dict[int, str] = {}
-        self._ncnn_net: ncnn.Net | None = None
 
         if self._arm64:
             try:
@@ -110,27 +98,16 @@ class WasteDetector:
             except Exception:
                 pass
 
-        # Try to find NCNN model first (much faster on ARM) unless explicitly disabled
-        if not cfg.force_pytorch:
-            ncnn_param = self._find_ncnn_model(model_path)
-            if ncnn_param:
-                try:
-                    self._load_ncnn_model(ncnn_param)
-                    self.model_format = "ncnn"
-                    return
-                except Exception as exc:
-                    print(f"Failed to load NCNN model: {exc}. Falling back to PyTorch.")
-        else:
-            print("⚠️ PyTorch inference forced (NCNN disabled for testing)")
-
-        # Fallback to PyTorch
+        # Load PyTorch model
         if not model_path.exists():
             raise FileNotFoundError(f"Model not found: {model_path}")
+        
         print(f"Loading PyTorch model: {model_path}")
         self.model = YOLO(str(model_path))
         self.model_format = "pt"
 
         try:
+            # Fuse layers to reduce inference overhead on CPU
             self.model.fuse()
         except Exception:
             pass
