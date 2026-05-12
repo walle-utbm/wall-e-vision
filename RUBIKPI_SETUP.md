@@ -9,9 +9,8 @@
 | **SoC** | Broadcom BCM2711 | Qualcomm Snapdragon 8 Gen1 |
 | **CPU** | 4x Cortex-A72 @ 1.5 GHz | 4x A55 @ 2.0 GHz + 4x A78 @ 2.7 GHz |
 | **Cores** | 4 | 8 (Big.Little) |
-| **RAM** | 4-8 GB | 4-8 GB |
+| **RAM** | 8 GB | 8 GB |
 | **TDP** | ~5W | ~8W |
-| **Backend** | NCNN recommandé | PyTorch suffisant |
 
 ## Installation sur RubikPi 3
 
