@@ -49,37 +49,12 @@ git checkout rubikpi3  # Basculer vers la branche RubikPi3
 
 ```bash
 # Environnement virtuel
-python3.11 -m venv .venv
+python -m venv .venv
 source .venv/bin/activate
 
 # Installer les dépendances
 pip install --upgrade pip
 pip install -r requirements.txt
-```
-
-### Tester la détection du matériel
-
-Le script détecte automatiquement si tu es sur RPi4 ou RubikPi:
-
-```bash
-# Test: infos matériel
-python -c "
-import os
-from pathlib import Path
-if Path('/proc/device-tree/model').exists():
-    print('🔧 Plateforme:', Path('/proc/device-tree/model').read_text())
-import platform
-print('🔧 Architecture:', platform.machine())
-import multiprocessing
-print('🔧 Cores:', multiprocessing.cpu_count())
-"
-```
-
-Sortie attendue pour RubikPi 3:
-```
-🔧 Plateforme: Thundercomm, Inc. RUBIK Pi 3
-🔧 Architecture: aarch64
-🔧 Cores: 8
 ```
 
 ## Différences de profils
@@ -114,15 +89,8 @@ python src/main.py
 
 Le script détecte RubikPi3 automatiquement et charge `RubikPiRuntimeConfig`.
 
-### Sortie attendue:
-```
-✅ Detected: RubikPi 3 (Snapdragon)
-Loading PyTorch model: model/best.pt
-📷 Warming up camera sensor (stabilizing white balance)...
-[Inférence en cours...]
-```
 
-## Tuning selon ton cas d'usage
+## Tuning selon le cas d'usage
 
 ### Plus haute précision (petits objets)
 ```python
