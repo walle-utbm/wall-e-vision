@@ -24,8 +24,17 @@
 # Mise à jour système
 sudo apt update && sudo apt upgrade -y
 
+# Dépôts Ubuntu ARM complets (nécessaires si python3-venv/pip sont absents)
+sudo tee /etc/apt/sources.list.d/ubuntu-ports.list >/dev/null <<'EOF'
+deb http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+deb http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+deb http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+deb http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted universe multiverse
+EOF
+sudo apt update
+
 # Python + pip
-sudo apt install -y python3.11 python3.11-venv python3.11-dev python3-pip
+sudo apt install -y python3 python3-venv python3-dev python3-pip
 
 # Dépendances OpenCV
 sudo apt install -y libatlas-base-dev libjasper-dev libtiff5 libjasper1 libharfp libwebp6
