@@ -2,7 +2,7 @@
 
 Modules:
     camera: webcam/video source capture.
-    cli: single Raspberry runtime profile entrypoint.
+    cli: single RubikPi runtime profile entrypoint.
     detector: YOLO inference and pickup point computation.
     labels: class names and recycle-bin mapping.
     pipeline: orchestration of capture, inference, tracking, and export.

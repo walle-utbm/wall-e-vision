@@ -6,7 +6,7 @@ Responsibilities:
 1. Capture frames from camera in a dedicated thread.
 2. Run inference/tracking in the main processing thread.
 3. Save only stable detections for compact production logs.
-4. Optionally render debug visualization.
+4. Optionally render live visualization.
 """
 
 import json
@@ -61,15 +61,14 @@ class VisionPipeline:
         self.width = width
         self.height = height
         self.fps = fps
-        self._detected_frame_count = 0
         self._display_persist_frames = max(0, display_persist_frames)
         self._display_cache: dict[int, tuple[int, Detection]] = {}
         self._last_rendered_frame = None
         self.camera_test_mode = camera_test_mode
         self.camera_test_interval_sec = camera_test_interval_sec
         self._last_test_frame_save_time = 0.0
-        self._proc_count = 0
         self._proc_start_time = 0.0
+        self._proc_count = 0
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.results_jsonl = self.output_dir / "detections.jsonl"
@@ -120,7 +119,6 @@ class VisionPipeline:
                     test_frame_path = self.camera_test_dir / f"frame_{int(timestamp)}.jpg"
                     cv2.imwrite(str(test_frame_path), frame)
                     self._last_test_frame_save_time = timestamp
-                    print(f"📷 Camera test frame saved: {test_frame_path.name}")
 
                 if frame_index % self.infer_every_n_frames != 0:
                     if self.show:
@@ -134,20 +132,18 @@ class VisionPipeline:
                 raw_detections = self.detector.infer(frame)
                 stable_detections = self.tracker.update(raw_detections)
 
-                if stable_detections:
-                    self._append_result(frame_index, timestamp, stable_detections)
+                self._append_result(frame_index, timestamp, raw_detections, stable_detections)
 
                 display_detections = self._build_display_detections(frame_index, stable_detections)
                 annotated = draw_detections(frame, display_detections)
                 self._last_rendered_frame = annotated
 
-                if stable_detections:
-                    # always save annotated frame for inspection
-                    self._detected_frame_count += 1
+                if raw_detections and frame_index % self.save_every_n_frames == 0:
+                    # Save only every Nth inference frame to reduce disk overhead.
                     out_file = self.predict_dir / f"frame_{frame_index:06d}.jpg"
-                    cv2.imwrite(str(out_file), annotated)
+                    current_annotated = draw_detections(frame, raw_detections)
+                    cv2.imwrite(str(out_file), current_annotated)
 
-                # FPS logging: count processed frames (inference steps)
                 if self._proc_start_time == 0.0:
                     self._proc_start_time = timestamp
                 self._proc_count += 1
@@ -203,12 +199,32 @@ class VisionPipeline:
 
         return display_detections
 
-    def _append_result(self, frame_index: int, timestamp: float, stable_detections: list[Detection]) -> None:
-        """Append a compact JSONL payload for one frame with stable detections."""
+    def _append_result(
+        self,
+        frame_index: int,
+        timestamp: float,
+        detections: list[Detection],
+        stable_detections: list[Detection],
+    ) -> None:
+        """Append a compact JSONL payload with current and tracked detections."""
         payload = {
             "frame_index": frame_index,
             "timestamp": timestamp,
             "detections": [
+                {
+                    "class_id": d.class_id,
+                    "class_name": d.class_name,
+                    "recycle_bin": d.recycle_bin,
+                    "confidence": round(d.confidence, 5),
+                    "bbox_xyxy": d.bbox,
+                    "pickup_xy": d.pickup_point,
+                    "track_id": d.track_id,
+                    "track_score": round(d.track_score, 5),
+                    "segmentation_available": d.segmentation_available,
+                }
+                for d in detections
+            ],
+            "stable_detections": [
                 {
                     "class_id": d.class_id,
                     "class_name": d.class_name,

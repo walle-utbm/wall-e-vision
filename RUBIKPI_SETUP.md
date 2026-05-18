@@ -16,9 +16,11 @@
 
 ### Prérequis
 
-- Ubuntu 24.04 (ou plus récent) sur RubikPi
+- Ubuntu 24.04 ou plus recent sur RubikPi 3
 - Python 3.11+
-- picamera2 pour la caméra IMX708
+- camera IMX708 accessible via `picamera2` et `python3-libcamera`
+
+## Installation
 
 ```bash
 # Mise à jour système
@@ -36,13 +38,7 @@ sudo apt update
 # Python + pip
 sudo apt install -y python3 python3-venv python3-dev python3-pip
 
-# Dépendances OpenCV
-sudo apt install -y libatlas-base-dev libjasper-dev libtiff5 libjasper1 libharfp libwebp6
-
-# libcamera pour IMX708
-sudo apt install -y libcamera-tools libcamera-apps
-
-# picamera2 (préinstallé sur Ubuntu 24.04 pour RubikPi, sinon):
+# picamera2 pour la camera IMX708
 pip install picamera2
 ```
 
@@ -51,7 +47,6 @@ pip install picamera2
 ```bash
 git clone https://github.com/walle-utbm/wall-e-vision.git
 cd wall-e-vision
-git checkout rubikpi3  # Basculer vers la branche RubikPi3
 ```
 
 ### Configuration de l'environnement Python
@@ -66,54 +61,49 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-## Différences de profils
-
-### Raspberry Pi 4 (branche principale `main`)
-```python
-# Réglages conservateurs pour CPU limité
-PiRuntimeConfig:
-  - imgsz: 640           # Résolution training
-  - fps: 30              # 30 fps smooth
-  - infer_every: 1       # Inférence chaque frame
-  - confirm_frames: 3    # Tracking stable
-  - Backend: NCNN (fallback PyTorch)
-```
-
-### RubikPi 3 (branche `rubikpi3`)
-```python
-# Réglages agressifs pour 8 cores puissants
-RubikPiRuntimeConfig:
-  - imgsz: 768           # +20% résolution (meilleure précision)
-  - fps: 60              # Double fréquence
-  - infer_every: 1       # Inférence chaque frame (CPU tient)
-  - confirm_frames: 2    # Confirmation plus rapide
-  - Backend: PyTorch direct
-```
-
 ## Lancement
 
 ```bash
 python src/main.py
 ```
 
-Le script détecte RubikPi3 automatiquement et charge `RubikPiRuntimeConfig`.
+## Reglages
 
+Les reglages du profil se trouvent dans [src/walle_vision/cli.py](src/walle_vision/cli.py) via `RubikPiRuntimeConfig`.
 
-## Tuning selon le cas d'usage
+Tu peux ajuster notamment:
+- `imgsz`
+- `conf`
+- `fps`
+- `infer_every`
+- `camera_test_mode` si tu veux generer des frames de verification
 
-### Plus haute précision (petits objets)
-```python
-RubikPiRuntimeConfig:
-  conf: float = 0.05    # Seuil plus permissif
-  imgsz: int = 960      # Résolution plus grande
-  max_det: int = 20     # Plus de détections
+## Remarques
+
+- Le modele par defaut est `model/best.pt`
+- Les sorties sont ecrites dans `outputs/`
+- Cette branche utilise uniquement le modele PyTorch `model/best.pt`
+- Le profil par defaut utilise un pipeline GStreamer `qtiqmmfsrc` avec `appsink name=sink` pour la camera
+
+## Depannage camera
+
+Si `libcamera-hello` est introuvable, installe les outils systeme de diagnostic:
+
+```bash
+sudo apt install -y libcamera-tools
 ```
 
-### Plus haute vitesse
-```python
-RubikPiRuntimeConfig:
-  conf: float = 0.20    # Filtre plus strict
-  imgsz: int = 640      # Résolution training
-  fps: int = 30         # Moins de pression caméra
-  infer_every: int = 2  # Analyser 1 frame sur 2
+Si le script affiche `No camera was detected by libcamera`, alors la pile Python fonctionne mais aucun capteur n'est visible. Verifie alors:
+
+- le branchement du cable CSI
+- l'activation de la camera dans le firmware / l'OS
+- la presence du paquet systeme `python3-libcamera`
+
+Tu peux aussi tester la detection avec:
+
+```bash
+python - <<'PY'
+from picamera2 import Picamera2
+print(Picamera2.global_camera_info())
+PY
 ```

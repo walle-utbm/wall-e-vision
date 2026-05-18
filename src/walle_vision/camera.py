@@ -4,141 +4,184 @@ from __future__ import annotations
 
 This module provides a tiny abstraction over camera backends so the rest
 of the project can consume frames as a simple Python generator.
-Supports standard webcams, Raspberry Pi camera, and video files.
+Supports the RubikPi IMX708 camera, webcams, and video files.
 """
 
-import time
 import sys
+import time
 from pathlib import Path
 from typing import Generator
 
-import cv2
 import numpy as np
 
 
 def _add_system_site_packages() -> None:
-    """Expose Raspberry Pi OS site-packages to a virtualenv when needed."""
+    """Expose distro-installed bindings to the venv when Python cannot see them.
+
+    This is needed on RubikPi because `picamera2` and `gi` are often installed
+    by the OS package manager rather than inside the project virtualenv.
+    """
+    major = sys.version_info.major
+    minor = sys.version_info.minor
     candidates = [
         Path("/usr/lib/python3/dist-packages"),
-        Path("/usr/lib/python3.13/dist-packages"),
-        Path("/usr/local/lib/python3.13/dist-packages"),
+        Path(f"/usr/lib/python3.{major}/dist-packages"),
+        Path(f"/usr/local/lib/python3.{major}/dist-packages"),
+        Path(f"/usr/lib/aarch64-linux-gnu/python{major}.{minor}/site-packages"),
+        Path(f"/usr/local/lib/aarch64-linux-gnu/python{major}.{minor}/site-packages"),
+        Path(f"/usr/lib/python3.{minor}/dist-packages"),
+        Path(f"/usr/local/lib/python3.{minor}/dist-packages"),
     ]
     for path in candidates:
         if path.exists():
             path_str = str(path)
             if path_str not in sys.path:
-                sys.path.append(path_str)
+                sys.path.insert(0, path_str)
 
 
-try:
-    from picamera2 import Picamera2
-except ImportError:  # pragma: no cover - optional dependency
-    _add_system_site_packages()
+def _load_gstreamer_bindings() -> tuple[object | None, object | None]:
+    """Import GStreamer bindings, with a venv fallback to system packages.
+
+    OpenCV's GStreamer backend is not reliable in this project environment, so
+    we keep a direct `gi.repository.Gst` path available as a second capture
+    option. If the venv cannot import `gi`, we retry after exposing the system
+    `dist-packages` paths.
+    """
     try:
-        from picamera2 import Picamera2
-    except ImportError:  # pragma: no cover - optional dependency
-        Picamera2 = None
+        import gi  # type: ignore
+
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst  # type: ignore
+
+        Gst.init(None)
+        return gi, Gst
+    except Exception:
+        _add_system_site_packages()
+        try:
+            import gi  # type: ignore
+
+            gi.require_version("Gst", "1.0")
+            from gi.repository import Gst  # type: ignore
+
+            Gst.init(None)
+            return gi, Gst
+        except Exception:
+            return None, None
+
+
+gi, Gst = _load_gstreamer_bindings()
+
+
+def _build_qtiqmmfsrc_pipeline(source: int, width: int, height: int, fps: int) -> str:
+    """Build the single capture pipeline supported by this runtime."""
+    return (
+        f"qtiqmmfsrc camera={source} ! "
+        f"video/x-raw,format=NV12,width={width},height={height},framerate={fps}/1 ! "
+        "queue max-size-buffers=1 leaky=downstream ! "
+        "videoconvert ! video/x-raw,format=BGR ! "
+        "appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true"
+    )
+
+
+class _GStreamerAppsinkCapture:
+    """Lightweight GStreamer capture backend using appsink."""
+
+    def __init__(self, pipeline: str, width: int, height: int) -> None:
+        if Gst is None:
+            raise RuntimeError("GStreamer Python bindings are not available")
+
+        self._pipeline = Gst.parse_launch(pipeline)
+        self._sink = self._pipeline.get_by_name("sink")
+        if self._sink is None:
+            self._pipeline.set_state(Gst.State.NULL)
+            raise RuntimeError("GStreamer pipeline does not expose an appsink named 'sink'")
+
+        self._width = width
+        self._height = height
+        self._opened = False
+        self._pipeline.set_state(Gst.State.PLAYING)
+        state_change = self._pipeline.get_state(2 * Gst.SECOND)
+        self._opened = state_change.state == Gst.State.PLAYING
+
+    def isOpened(self) -> bool:
+        return self._opened
+
+    def read(self) -> tuple[bool, np.ndarray | None]:
+        if not self._opened:
+            return False, None
+
+        sample = self._sink.emit("try-pull-sample", 2 * Gst.SECOND)
+        if sample is None:
+            return False, None
+
+        buffer = sample.get_buffer()
+        success, map_info = buffer.map(Gst.MapFlags.READ)
+        if not success:
+            return False, None
+
+        try:
+            frame = np.frombuffer(map_info.data, dtype=np.uint8)
+            frame = frame.reshape((self._height, self._width, 3))
+            return True, frame.copy()
+        finally:
+            buffer.unmap(map_info)
+
+    def release(self) -> None:
+        self._pipeline.set_state(Gst.State.NULL)
+        self._opened = False
 
 
 class CameraStream:
-    """Stream frames from a webcam, video source, or Raspberry Pi camera.
+    """Stream frames from the RubikPi camera using a single GStreamer backend.
 
-    The wrapper applies low-latency camera settings and yields
-    (frame_index, timestamp, frame) tuples. Optimized for Raspberry Pi
-    with ArduCAM support.
-
-    Attributes:
-        _cap: OpenCV VideoCapture handle.
-        _frame_index: Number of frames already yielded.
+    The runtime uses `qtiqmmfsrc` + `appsink` because that is the path that
+    works on the RubikPi device. `source` can be either:
+    - an integer camera index, which builds the default RubikPi pipeline
+    - a full GStreamer pipeline string
+    - a pipeline string prefixed with `gst:` or `gstreamer:`
     """
 
     def __init__(self, source: int | str = 0, width: int = 640, height: int = 640, fps: int = 30) -> None:
-        """Initialize camera stream.
-
-        Args:
-            source: Camera index (0, 1, ...) or stream/video path.
-                   For Raspberry Pi IMX708 libcamera: use 0 (default).
-                   For USB cameras: try 0 or 1.
-            width: Requested capture width (640 matches model training resolution).
-            height: Requested capture height (640 matches model training resolution).
-            fps: Requested capture frame rate (30 for smooth real-time on 8GB RAM).
-        """
-        self._source = source
-        self._backend = "opencv"
-        self._picam2 = None
-        self._cap = None
-
-        if isinstance(source, int) and Picamera2 is not None:
-            self._backend = "picamera2"
-            self._picam2 = Picamera2(source)
-            config = self._picam2.create_video_configuration(
-                main={"size": (width, height), "format": "RGB888"},
-                buffer_count=2,
-            )
-            self._picam2.configure(config)
-            self._picam2.start()
-            
-            # Warmup period for white balance stabilization (shorter to reduce thermal load)
-            print("📷 Warming up camera sensor (stabilizing white balance)...")
-            for _ in range(3):  # ~1 second at 30 FPS
-                _ = self._picam2.capture_array()
-                time.sleep(0.1)
-        else:
-            self._cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
-            if not self._cap.isOpened():
-                # Fallback to default backend for webcams, files, and URLs.
-                self._cap = cv2.VideoCapture(source)
-
-            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-            self._cap.set(cv2.CAP_PROP_FPS, fps)
-            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
-            # Best-effort camera stabilization for more consistent detections.
-            self._set_if_supported(cv2.CAP_PROP_AUTOFOCUS, 0)
-            self._set_if_supported(cv2.CAP_PROP_AUTO_WB, 0)
-            self._set_if_supported(cv2.CAP_PROP_AUTO_EXPOSURE, 1)
-        self._frame_index = 0
-
-        if self._backend == "opencv" and not self._cap.isOpened():
+        if Gst is None:
             raise RuntimeError(
-                f"Unable to open camera source: {source}. "
-                "For Raspberry Pi CSI cameras, install picamera2 or expose the camera as a V4L2 device."
+                "GStreamer Python bindings are not available. "
+                "Install the system GStreamer packages or expose them to the virtualenv."
             )
 
-    def _set_if_supported(self, prop_id: int, value: float) -> None:
-        """Set a capture property without failing when backend/camera ignores it."""
-        try:
-            self._cap.set(prop_id, value)
-        except Exception:
-            pass
+        if isinstance(source, str) and source.isdigit():
+            source = int(source)
+
+        self._source = source
+        if isinstance(source, int):
+            pipeline = _build_qtiqmmfsrc_pipeline(source, width, height, fps)
+        else:
+            pipeline = source
+            for prefix in ("gst:", "gstreamer:"):
+                if pipeline.startswith(prefix):
+                    pipeline = pipeline[len(prefix) :].strip()
+                    break
+
+        self._capture = _GStreamerAppsinkCapture(pipeline, width, height)
+        if not self._capture.isOpened():
+            raise RuntimeError(
+                f"Unable to open GStreamer camera pipeline: {pipeline}. "
+                "Check qtiqmmfsrc, appsink, and device access."
+            )
+
+        self._frame_index = 0
 
     def frames(self) -> Generator[tuple[int, float, np.ndarray], None, None]:
         """Yield frames continuously until capture fails or is closed."""
         while True:
-            if self._backend == "picamera2":
-                frame = self._picam2.capture_array()
-                if frame is None:
-                    if self._frame_index == 0:
-                        raise RuntimeError(
-                            f"Unable to read a frame from camera source: {self._source}. "
-                            "Check that picamera2/libcamera is installed and the camera is accessible."
-                        )
-                    break
-                # Picamera2 gives XBGR8888 despite asking for RGB888
-                # No conversion needed - use as-is for OpenCV/NCNN pipeline
-                
-                # Add small delay to reduce thermal stress on Arducam IMX708
-                time.sleep(0.01)
-            else:
-                ok, frame = self._cap.read()
-                if not ok:
-                    if self._frame_index == 0:
-                        raise RuntimeError(
-                            f"Unable to read a frame from camera source: {self._source}. "
-                            "Check that the camera is connected and accessible (V4L2/libcamera)."
-                        )
-                    break
+            ok, frame = self._capture.read()
+            if not ok:
+                if self._frame_index == 0:
+                    raise RuntimeError(
+                        f"Unable to read a frame from camera source: {self._source}. "
+                        "Check that qtiqmmfsrc and appsink are available and the camera is accessible."
+                    )
+                break
+
             ts = time.time()
             idx = self._frame_index
             self._frame_index += 1
@@ -146,7 +189,4 @@ class CameraStream:
 
     def close(self) -> None:
         """Release camera resources."""
-        if self._picam2 is not None:
-            self._picam2.stop()
-        if self._cap is not None:
-            self._cap.release()
+        self._capture.release()
