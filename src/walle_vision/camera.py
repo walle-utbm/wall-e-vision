@@ -125,8 +125,10 @@ class CameraStream:
                             "Check that picamera2/libcamera is installed and the camera is accessible."
                         )
                     break
-                # Picamera2 gives XBGR8888 despite asking for RGB888
-                # No conversion needed - use as-is for OpenCV/NCNN pipeline
+                if frame.ndim == 3 and frame.shape[2] == 3:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                elif frame.ndim == 3 and frame.shape[2] == 4:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
                 
                 # Add small delay to reduce thermal stress on Arducam IMX708
                 time.sleep(0.01)

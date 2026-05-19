@@ -2,10 +2,12 @@
 
 Modules:
     camera: webcam/video source capture.
-    cli: single Raspberry runtime profile entrypoint.
-    detector: YOLO inference and pickup point computation.
+    cli: Raspberry streaming runtime entrypoint.
+    detector: YOLO inference and pickup point computation (PC-side branch).
     labels: class names and recycle-bin mapping.
-    pipeline: orchestration of capture, inference, tracking, and export.
+    pipeline: local orchestration of capture, inference, tracking, and export.
+    raspberry_pipeline: Raspberry Pi frame streaming client.
+    transport: TCP frame/result protocol helpers.
     sorting: business mapping class -> recycle bin.
     tracking: temporal smoothing and track confirmation.
     types: shared typed dataclasses.
@@ -18,7 +20,9 @@ __all__ = [
     "cli",
     "labels",
     "pipeline",
+    "raspberry_pipeline",
     "sorting",
+    "transport",
     "tracking",
     "types",
     "visualization",

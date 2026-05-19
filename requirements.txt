@@ -1,17 +1,9 @@
-# Core dependencies optimized for Raspberry Pi
-ultralytics==8.4
+# Core dependencies for the Raspberry Pi sender branch
 opencv-python-headless
 numpy==2.4.4
-ncnn>=1.0.20260114
 
-# Optional: For NCNN model conversion (export .pt to NCNN)
-# Required for: python convert_to_ncnn.py
-# openvino-dev>=2024.0  # For NCNN export (Windows/Linux)
-# openvino-dev[caffe,onnx]>=2024.0  # With additional converters
+# Optional: for Raspberry Pi CSI cameras
+# Install separately on Raspberry Pi OS when needed:
+#   pip install picamera2>=0.3.0
 
-# Optional: For ArduCAM support (uncomment if using ArduCAM)
-picamera2>=0.3.0  # Raspberry Pi camera library
-
-# Optional: For better Raspberry Pi performance
-# Use the system package on Raspberry Pi OS:
-# sudo apt install python3-torch python3-torchvision -y
+# Optional: PC-side inference dependencies will live in the receiver branch.
