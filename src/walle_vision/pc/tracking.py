@@ -1,20 +1,15 @@
 from __future__ import annotations
 
-"""Temporal tracking and smoothing for frame-to-frame detection stability.
-
-The tracker associates detections by class + IoU, confirms tracks after a
-minimum number of hits, and smooths confidence values over a short window.
-"""
+"""Temporal tracking and smoothing for frame-to-frame detection stability."""
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, List
+from typing import Deque
 
 from .types import BBox, Detection
 
 
 def _bbox_iou(left: BBox, right: BBox) -> float:
-    """Compute Intersection-over-Union between two bounding boxes."""
     left_x1, left_y1, left_x2, left_y2 = left
     right_x1, right_y1, right_x2, right_y2 = right
 
@@ -37,7 +32,6 @@ def _bbox_iou(left: BBox, right: BBox) -> float:
 
 @dataclass(slots=True)
 class TrackState:
-    """Internal state for one tracked object across successive frames."""
     track_id: int
     last_detection: Detection
     hits: int = 1
@@ -48,10 +42,6 @@ class TrackState:
         if not self.confidence_history:
             self.confidence_history.append(self.last_detection.confidence)
 
-    @property
-    def confirmed(self) -> bool:
-        return self.hits >= 1
-
     def smoothed_confidence(self, window_size: int) -> float:
         if window_size <= 1 or not self.confidence_history:
             return self.last_detection.confidence
@@ -60,10 +50,7 @@ class TrackState:
 
 
 class TemporalDetectionTracker:
-    """Lightweight tracker used to reduce flicker and false-positive spikes."""
-
     def __init__(self, iou_threshold: float = 0.3, confirm_frames: int = 3, max_missed_frames: int = 2, confidence_window: int = 5) -> None:
-        """Initialize temporal association and confirmation thresholds."""
         self.iou_threshold = iou_threshold
         self.confirm_frames = max(1, confirm_frames)
         self.max_missed_frames = max(0, max_missed_frames)
@@ -72,7 +59,6 @@ class TemporalDetectionTracker:
         self._tracks: list[TrackState] = []
 
     def update(self, detections: list[Detection]) -> list[Detection]:
-        """Associate current detections to tracks and return confirmed detections only."""
         if not self._tracks:
             self._tracks = [self._create_track(det) for det in detections]
             return self._confirmed_detections()
@@ -115,13 +101,11 @@ class TemporalDetectionTracker:
         return self._confirmed_detections()
 
     def _create_track(self, detection: Detection) -> TrackState:
-        """Create a new track for an unmatched detection."""
         track = TrackState(track_id=self._next_track_id, last_detection=detection)
         self._next_track_id += 1
         return track
 
     def _update_track(self, track: TrackState, detection: Detection) -> None:
-        """Update a matched track with the latest detection."""
         track.last_detection = detection
         track.hits += 1
         track.missed_frames = 0
@@ -130,7 +114,6 @@ class TemporalDetectionTracker:
             track.confidence_history.popleft()
 
     def _confirmed_detections(self) -> list[Detection]:
-        """Build output detections from currently confirmed tracks."""
         confirmed_detections: list[Detection] = []
         for track in self._tracks:
             if track.hits < self.confirm_frames or track.missed_frames > self.max_missed_frames:

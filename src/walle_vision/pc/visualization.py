@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-"""Rendering helpers for debug/live visualization.
-
-The display is optional and mostly used during development on PC.
-"""
+"""Rendering helpers for debug/live visualization on the PC."""
 
 import cv2
 import numpy as np
@@ -18,7 +15,6 @@ BIN_COLORS = {
 
 
 def draw_detections(frame: np.ndarray, detections: list[Detection]) -> np.ndarray:
-    """Draw boxes, labels, and pickup points on a frame."""
     annotated = frame.copy()
     for det in detections:
         color = BIN_COLORS.get(det.recycle_bin, BIN_COLORS["other"])

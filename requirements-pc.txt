@@ -1,0 +1,6 @@
+# Core dependencies for the PC inference server
+ultralytics>=8.3.0
+opencv-python>=4.10
+numpy>=2.0
+
+# Optional: CUDA / PyTorch extras are handled by the ultralytics install.

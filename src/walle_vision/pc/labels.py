@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Class catalog and business mapping used by the sorting module."""
+"""Class catalog and business mapping used by the PC-side sorting module."""
 
 CLASS_NAMES = [
     "Plastic bottle",
@@ -19,7 +19,6 @@ CLASS_NAMES = [
     "Straw",
 ]
 
-# yellow: recyclable (french yellow bin), glass: glass-only bin, other: residual or specific handling.
 SORTING_MAP = {
     "Plastic bottle": "yellow",
     "Glass bottle": "glass",
