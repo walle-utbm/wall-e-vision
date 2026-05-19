@@ -1,10 +1,10 @@
 wall-e-vision
 
-Branche Raspberry Pi du projet wall-e-vision.
+Branche client Raspberry Pi du projet wall-e-vision.
 Le Raspberry Pi capture le flux camera, compresse les frames et les envoie au PC.
-Le PC renvoie ensuite les resultats d'inference sur la meme connexion TCP.
+Le PC renverra ensuite les resultats d'inference sur la meme connexion TCP.
 
-Cette branche ne fait donc plus l'inference localement sur le Raspberry Pi.
+Cette branche ne fait plus l'inference localement sur le Raspberry Pi.
 
 ## Structure du projet
 
@@ -12,10 +12,7 @@ Cette branche ne fait donc plus l'inference localement sur le Raspberry Pi.
 wall-e-vision/
 	model/
 		best.pt
-	outputs/
-		frames/
 			remote_results.jsonl
-			camera_test/
 		main.py
 		walle_vision/
 			__init__.py
@@ -24,10 +21,8 @@ wall-e-vision/
 			detector.py
 				transport.py
 				raspberry_pipeline.py
-				... (modules PC-side conserves pour la branche de reception)
 ```
 
-## Ce que fait cette branche
 
 Pour chaque frame camera:
 - capture sur le Raspberry Pi
@@ -37,10 +32,6 @@ Pour chaque frame camera:
 - journal local des resultats recus dans `outputs/remote_results.jsonl`
 
 Le Raspberry Pi ne fait plus l'inference locale. Il reste uniquement le noeud d'acquisition et de transport.
-
-## Mapping des classes vers tri
-
-Le mapping reste defini dans `src/walle_vision/labels.py`, mais il est utilise par la branche PC qui renvoie les resultats au Raspberry Pi.
 
 ## Installation minimale Raspberry Pi
 
@@ -135,9 +126,6 @@ Format JSONL exemple:
 - [src/walle_vision/camera.py](src/walle_vision/camera.py) - lecture flux camera (OpenCV + Picamera2)
 - [src/walle_vision/transport.py](src/walle_vision/transport.py) - protocole TCP frame/result
 - [src/walle_vision/raspberry_pipeline.py](src/walle_vision/raspberry_pipeline.py) - capture + envoi + reception
-- [src/walle_vision/detector.py](src/walle_vision/detector.py) - inference YOLO cote PC (branche suivante)
-- [src/walle_vision/pipeline.py](src/walle_vision/pipeline.py) - pipeline local historique
-- [src/walle_vision/labels.py](src/walle_vision/labels.py) - mapping tri conserve pour le PC
 
 ## Notes optimisation Raspberry Pi 4/5 (8GB + IMX708)
 
