@@ -1,0 +1,6 @@
+# Core dependencies optimized for RubikPi 3 (Snapdragon 8 Gen1)
+ultralytics==8.4
+opencv-python-headless
+numpy==2.4.4
+onnx>=1.21.0
+onnxruntime>=1.26.0
