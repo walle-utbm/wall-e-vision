@@ -1,9 +1,0 @@
-# Core dependencies for the Raspberry Pi sender branch
-opencv-python-headless
-numpy==2.4.4
-
-# Optional: for Raspberry Pi CSI cameras
-# Install separately on Raspberry Pi OS when needed:
-#   pip install picamera2>=0.3.0
-
-# Optional: PC-side inference dependencies will live in the receiver branch.

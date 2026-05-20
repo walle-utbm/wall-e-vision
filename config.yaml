@@ -1,0 +1,45 @@
+hardware: rpi4
+camera_type: picamera
+mode: edge_standalone
+
+paths:
+  model_dir: model
+  output_dir: outputs
+
+models:
+  rpi4: best.pt
+  rubikpi3: best.onnx
+  pc: best.pt
+
+camera:
+  source: 0
+  width: 640
+  height: 640
+  fps: 30
+  warmup_frames: 3
+
+detector:
+  conf_threshold: 0.10
+  iou_threshold: 0.45
+  image_size: 640
+  max_detections: 8
+  use_half: false
+  device: cpu
+  workers: 0
+  force_pytorch: false
+
+runtime:
+  show: false
+  infer_every_n_frames: 1
+  save_every_n_frames: 10
+  camera_test_mode: false
+  camera_test_interval_sec: 5.0
+
+network:
+  host: 0.0.0.0
+  port: 5000
+  client_host: 192.168.137.1
+  client_port: 5000
+  jpeg_quality: 80
+  reconnect_delay_sec: 2.0
+  max_inflight_frames: 2

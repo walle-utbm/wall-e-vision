@@ -1,72 +1,246 @@
-wall-e-vision
+# wall-e-vision
 
-Mettre en place une pipeline de vision temps reel pour RubikPi 3. Detecter les dechets avec YOLO, puis les classer dans une categorie de tri:
-- yellow: recyclable
-- glass: verre
-- other: dechet residuel
+Architecture unifiée pour la vision du robot Wall-E. Le dépôt expose un point d'entrée unique, [main.py](main.py), qui lit [config.yaml](config.yaml) puis instancie automatiquement le bon pipeline selon le matériel, le type de caméra et le mode d'exécution.
 
-Conserver une seule branche RubikPi.
+## Vue d'ensemble
+
+Le refactor sépare le projet en quatre couches:
+
+- `core` pour l'acquisition caméra.
+- `ai` pour le chargement du modèle YOLO et l'inférence.
+- `network` pour l'échange TCP des frames et des résultats.
+- `pipelines` pour assembler les briques selon le mode choisi.
+
+## Modes d'exécution
+
+### `edge_standalone`
+
+Mode d'inférence locale. La capture vidéo et l'inférence YOLO tournent sur la même machine.
+
+Cas d'usage:
+
+- Raspberry Pi 4 avec modèle `.pt`.
+- Rubik Pi 3 avec modèle `.onnx`.
+
+Comportement:
+
+- la caméra est consommée dans un thread dédié;
+- les frames sont traitées en continu par le détecteur local;
+- les résultats peuvent être écrits dans `outputs/detections.jsonl`;
+- les images annotées peuvent être enregistrées dans `outputs/predict/`;
+- l'affichage OpenCV est optionnel via `runtime.show`.
+
+### `stream_client`
+
+Mode de capture et de streaming.
+- le pc et le raspberry doivent être connectés au même réseau. 
+- penser à changer l'ip du serveur donc du pc.
+
+Cas d'usage:
+
+- Raspberry Pi qui n'exécute pas l'IA localement;
+- envoi des frames JPEG vers le PC via TCP.
+
+Comportement:
+
+- la caméra capture localement dans un thread dédié;
+- les frames sont compressées en JPEG avant l'envoi;
+- le client maintient une file d'in-flight limitée par `network.max_inflight_frames`;
+- les résultats renvoyés par le PC sont stockés dans `outputs/remote_results.jsonl`;
+- l'affichage peut superposer un résumé réseau et latence.
+
+### `stream_server`
+
+Mode serveur PC.
+
+- le pc et le raspberry doivent être connectés au même réseau. 
+
+Cas d'usage:
+
+- PC de bureau recevant les frames depuis le Raspberry Pi client;
+- inférence YOLO côté serveur sur les frames reçues.
+
+Comportement:
+
+- le serveur écoute sur `network.host:network.port`;
+- il reçoit des frames JPEG encapsulées dans un protocole TCP simple;
+- il décode, infère, tracke puis renvoie les résultats au client;
+- les résultats sont archivés dans `outputs/detections.jsonl`;
+- les images annotées sont sauvegardées dans `outputs/predict/`.
+
+## Types de caméra
+
+Le backend caméra est centralisé dans [src/walle_vision/core/camera.py](src/walle_vision/core/camera.py).
+
+### `picamera`
+
+Destiné aux caméras CSI.
+
+Comportement:
+
+- tente d'abord `Picamera2` quand elle est disponible;
+- sur Rubik Pi 3, le backend GStreamer peut être utilisé;
+- le paramètre `camera.warmup_frames` permet de stabiliser l'exposition avant la boucle principale.
+
+### `usb`
+
+Caméra USB classique via OpenCV.
+
+Comportement:
+
+- ouvre la source avec `cv2.VideoCapture`;
+- applique `width`, `height`, `fps` et un buffer minimal;
+- convient aux webcams, UVC et périphériques exposés par index ou par URL.
+
+### `none`
+
+Mode sans caméra réelle.
+
+Usage:
+
+- utile pour certains tests réseau ou pour des scénarios où la caméra est gérée ailleurs;
+- la création de frames est volontairement interdite dans ce backend.
+
+## Détection YOLO
+
+Le moteur d'inférence est unifié dans [src/walle_vision/ai/detector.py](src/walle_vision/ai/detector.py).
+
+Points importants:
+
+- le modèle est choisi depuis `models` dans [config.yaml](config.yaml);
+- `rpi4` et `pc` pointent vers un modèle `.pt`;
+- `rubikpi3` pointe vers un modèle `.onnx`;
+- si le fichier configuré n'existe pas, le détecteur tente l'extension alternative compatible;
+- les paramètres `detector.conf_threshold`, `detector.iou_threshold`, `detector.image_size` et `detector.max_detections` pilotent l'inférence;
+- le tracking temporel est appliqué après l'inférence pour stabiliser les résultats.
+
+## Pipelines
+
+### [pipeline_edge.py](src/walle_vision/pipelines/pipeline_edge.py)
+
+Pipeline complet pour les modes standalone.
+
+Responsabilités:
+
+- créer la caméra;
+- charger le détecteur local;
+- exécuter le tracker;
+- produire les résultats et les images annotées.
+
+Spécificités:
+
+- la capture est découplée de l'inférence via une file mémoire courte;
+- `runtime.infer_every_n_frames` permet de réduire la charge CPU;
+- `runtime.save_every_n_frames` contrôle la fréquence d'export des images annotées;
+- `runtime.camera_test_mode` permet de sauvegarder périodiquement des frames brutes pour diagnostic.
+
+### [pipeline_client.py](src/walle_vision/pipelines/pipeline_client.py)
+
+Pipeline client du mode streaming.
+
+Responsabilités:
+
+- capturer les frames;
+- les compresser en JPEG;
+- les envoyer au PC;
+- recevoir les résultats et mettre à jour les métriques réseau.
+
+Spécificités:
+
+- le client limite le nombre de frames en vol pour éviter la saturation mémoire;
+- les reconnexions utilisent `network.reconnect_delay_sec`;
+- les timings de capture, d'envoi et de retour sont affichés dans la sortie console;
+- le fichier `outputs/remote_results.jsonl` centralise les réponses du serveur.
+
+### [pipeline_server.py](src/walle_vision/pipelines/pipeline_server.py)
+
+Pipeline serveur PC.
+
+Responsabilités:
+
+- écouter les connexions entrantes;
+- décoder les frames JPEG;
+- exécuter YOLO localement;
+- renvoyer les résultats au client.
+
+Spécificités:
+
+- le serveur traite les clients séquentiellement;
+- la fermeture propre passe par les signaux SIGINT et SIGTERM;
+- les résultats sont serialisés dans un format JSON stable partagé avec le client.
+
+## Arborescence utile
+
+- [src/walle_vision/core/camera.py](src/walle_vision/core/camera.py) contient la factory caméra et les backends OpenCV, Picamera2 et GStreamer.
+- [src/walle_vision/ai/detector.py](src/walle_vision/ai/detector.py) contient le chargement YOLO `.pt` et `.onnx`.
+- [src/walle_vision/network/transport.py](src/walle_vision/network/transport.py) contient le protocole TCP et l'encodage JPEG.
+- [src/walle_vision/pipelines/](src/walle_vision/pipelines/) contient les trois pipelines métiers.
+- [src/walle_vision/utils/visualization.py](src/walle_vision/utils/visualization.py) gère l'affichage des détections.
+- [src/walle_vision/utils/labels.py](src/walle_vision/utils/labels.py) gère le mapping métier des classes.
+
+## Configuration
+
+Le fichier [config.yaml](config.yaml) est la source de vérité.
+
+### Clés principales
+
+- `hardware`: `rpi4`, `rubikpi3` ou `pc`.
+- `camera_type`: `picamera`, `usb` ou `none`.
+- `mode`: `edge_standalone`, `stream_client` ou `stream_server`.
+
+### Sections secondaires
+
+- `paths`: emplacements des modèles et des sorties.
+- `models`: nom du modèle à utiliser par matériel.
+- `camera`: source, résolution, FPS et warmup.
+- `detector`: seuils et options YOLO.
+- `runtime`: affichage, fréquence d'inférence et mode test caméra.
+- `network`: adresse serveur, client, qualité JPEG et limites d'in-flight.
+
+### Exemple de choix par profil
+
+```yaml
+# Raspberry Pi 4 autonome
+hardware: rpi4
+camera_type: picamera
+mode: edge_standalone
+
+# Rubik Pi 3 autonome
+hardware: rubikpi3
+camera_type: picamera
+mode: edge_standalone
+
+# Client Raspberry Pi qui stream vers le PC
+hardware: rpi4
+camera_type: picamera
+mode: stream_client
+
+# Serveur PC
+hardware: pc
+camera_type: none
+mode: stream_server
+```
+
+## Sorties générées
+
+Selon le mode, le projet écrit principalement:
+
+- `outputs/detections.jsonl` pour les résultats locaux ou serveur;
+- `outputs/remote_results.jsonl` pour les réponses reçues par le client;
+- `outputs/predict/` pour les images annotées;
+- `outputs/camera_test/` quand `runtime.camera_test_mode` est activé.
+
+## Dépendances
+
+Les dépendances sont séparées par cible:
+
+- [requirements/base.txt](requirements/base.txt) pour le socle commun;
+- [requirements/edge.txt](requirements/edge.txt) pour les modes embarqués;
+- [requirements/pc.txt](requirements/pc.txt) pour le serveur PC.
+
+Le projet s'appuie notamment sur `ultralytics`, `opencv-python`, `numpy` et `PyYAML`. Selon la plateforme, `picamera2` et le support GStreamer peuvent aussi être nécessaires.
 
 ## Installation
-Branche client Raspberry Pi du projet wall-e-vision.
-Le Raspberry Pi capture le flux camera, compresse les frames et les envoie au PC.
-Le PC renverra ensuite les resultats d'inference sur la meme connexion TCP.
-
-Cette branche ne fait plus l'inference localement sur le Raspberry Pi.
-Branche PC du projet wall-e-vision.
-Le Raspberry Pi envoie les frames camera en JPEG sur TCP, le PC execute le modele YOLO, puis renvoie les resultats structues au client.
-
-## Structure du projet
-
-```text
-wall-e-vision/
-	model/
-		best.pt
-			remote_results.jsonl
-		main.py
-		walle_vision/
-			__init__.py
-			camera.py
-			cli.py
-			detector.py
-				transport.py
-				raspberry_pipeline.py
-```
-
-
-Pour chaque frame camera:
-- capture sur le Raspberry Pi
-- compression JPEG
-- envoi au PC via TCP
-- reception du resultat PC sous forme JSON
-- journal local des resultats recus dans `outputs/remote_results.jsonl`
-
-Le Raspberry Pi ne fait plus l'inference locale. Il reste uniquement le noeud d'acquisition et de transport.
-
-## Installation minimale Raspberry Pi
-
-```bash
-pip install -r requirements.txt
-```
-
-### Raspberry Pi 4/5 (8GB RAM + IMX708)
-
-**Prerequis: Camera IMX708 connectée et libcamera configurée**
-
-#### Configuration IMX708 (ajouter dans /boot/config.txt)
-
-```ini
-# Décommenter/ajouter ces lignes:
-camera_auto_detect=0
-dtoverlay=imx708
-```
-
-Puis redémarrer:
-```bash
-sudo reboot
-```
-
-#### Installation
 
 ```bash
 cd /home/walle
@@ -78,205 +252,20 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
-
-# Si tu utilises la camera CSI IMX708, installer aussi picamera2 si besoin
-pip install picamera2
-# Sur Raspberry Pi OS, installer aussi les bindings systeme libcamera si necessaire
-sudo apt install python3-libcamera python3-picamera2 -y
-```
-
-Test caméra:
-```bash
-sudo apt install libcamera-apps -y
-# Verifier que libcamera voit la camera
-libcamera-hello --list-cameras
-```
-
 ## Lancement
 
-Depuis la racine du projet, lancer:
-	outputs/
-		predict/
-		detections.jsonl
-	src/
-		pc_main.py
-		walle_vision/
-			__init__.py
-			pc/
-				__init__.py
-				detector.py
-				labels.py
-				sorting.py
-				tracking.py
-				types.py
-				transport.py
-				visualization.py
-				server.py
-	requirements-pc.txt
-	README.md
-```
-
-## Ce que fait cette branche
-
-Pour chaque frame recu:
-- decodage JPEG
-- inference YOLO
-- stabilisation temporelle
-- rendu optionnel des detections
-- ecriture du journal local `outputs/detections.jsonl`
-- renvoi d'un JSON de resultat sur la connexion TCP
-
-## Lancement
-
-Installe les dependances PC:
+Le lancement se fait toujours depuis la racine:
 
 ```bash
-pip install -r requirements-pc.txt
+source .venv/bin/activate
+python main.py
 ```
 
-## Comment ca marche
-Cette commande lance le profil Raspberry de streaming vers le PC.
-Le PC doit exposer le serveur TCP d'inference sur l'adresse configuree dans `PiRuntimeConfig`.
+Le code charge [config.yaml](config.yaml), construit automatiquement le pipeline approprié puis lance sa méthode `run()`.
 
-Chainer le traitement ainsi:
-1. Envoyer les images de la camera RubikPi via un pipeline GStreamer `qtiqmmfsrc` + `appsink`.
-2. Lire les frames dans `src/walle_vision/camera.py` et les transmettre au pipeline.
-3. Lancer l'inference YOLO dans `src/walle_vision/detector.py`.
-4. Stabiliser les detections dans le temps avec `src/walle_vision/tracking.py`.
-5. Ecrire les resultats dans `outputs/` et sauvegarder des images annotees depuis `src/walle_vision/pipeline.py`.
+## Notes d'architecture
 
-Utiliser par defaut:
-- modele: `model/best.onnx` genere depuis `model/best.pt`
-- resolution inference: `512`
-- camera: pipeline GStreamer `qtiqmmfsrc` + `appsink name=sink` pour la capture Python
-- sortie: `outputs/`
-
-Terminer le pipeline par `appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true`.
-Pour modifier les reglages reseau et camera, edite `PiRuntimeConfig` dans [src/walle_vision/cli.py](src/walle_vision/cli.py):
-
-```python
-@dataclass(slots=True)
-class PiRuntimeConfig:
-	source: str = "0"                      # 0 pour camera IMX708, path pour video
-	output_dir: str = "outputs"            # logs reception locales
-	width: int = 640                       # resolution camera
-	height: int = 640
-	fps: int = 30                          # frames par seconde
-	show: bool = False                     # afficher la capture en local
-	pc_host: str = "192.168.137.1"          # IP du PC
-	pc_port: int = 5000                    # port TCP d'entree PC
-	jpeg_quality: int = 80                 # compression JPEG avant envoi
-```
-
-## Configuration
-Puis lance le serveur:
-
-```bash
-python src/pc_main.py
-```
-
-Par defaut, le serveur ecoute sur `0.0.0.0:5000`.
-
-## Configuration rapide
-
-Les principaux reglages sont dans [src/walle_vision/pc/server.py](src/walle_vision/pc/server.py) et [src/walle_vision/pc/detector.py](src/walle_vision/pc/detector.py).
-
-```python
-@dataclass(slots=True)
-class PCRuntimeConfig:
-    host: str = "0.0.0.0"
-    port: int = 5000
-    model: str = "model/best.pt"
-    output_dir: str = "outputs"
-    conf: float = 0.10
-    iou: float = 0.45
-	imgsz: tuple[int, int] = (1280, 720)
-    max_det: int = 8
-```
-
-## Sorties
-
-Ouvrir [src/walle_vision/cli.py](src/walle_vision/cli.py) et modifier `RubikPiRuntimeConfig` pour ajuster:
-- `imgsz`
-- `fps`
-- `conf`
-- `infer_every`
-- `show`
-- `camera_test_mode` pour generer des frames de verification
-
-Limiter le backend camera a `qtiqmmfsrc` + `appsink`.
-Apres chaque run, tu obtiens:
-- **outputs/remote_results.jsonl** - journal local des resultats recus du PC
-- **outputs/camera_test/** - captures brutes si le mode test est active
-
-Format JSONL exemple:
-```json
-{"frame_index": 0, "timestamp": 123.456, "detections": [{"class_id": 0, "class_name": "Plastic bottle", "recycle_bin": "yellow", "confidence": 0.95, "bbox_xyxy": [100, 200, 150, 250], "pickup_xy": [125, 225], "track_id": 1}]}
-```
-
-## Pourquoi `gi`
-
-Utiliser `gi` comme pont Python vers GStreamer. Charger `Gst` directement depuis Python, demarrer le pipeline `qtiqmmfsrc`, et lire les images dans `appsink` sans passer par un autre moteur de capture.
-- [src/main.py](src/main.py) - point d'entree executable
-- [src/walle_vision/cli.py](src/walle_vision/cli.py) - profil Raspberry Pi de streaming
-- [src/walle_vision/camera.py](src/walle_vision/camera.py) - lecture flux camera (OpenCV + Picamera2)
-- [src/walle_vision/transport.py](src/walle_vision/transport.py) - protocole TCP frame/result
-- [src/walle_vision/raspberry_pipeline.py](src/walle_vision/raspberry_pipeline.py) - capture + envoi + reception
-
-Faire communiquer le code Python avec la pile GStreamer systeme de RubikPi via `gi`.
-
-## Fichiers utiles
-### Profil par defaut:
-- Resolution: **640×640**
-- FPS camera: **30**
-- Compression JPEG: **80**
-- Transport: **TCP full-duplex** vers le PC
-- Resultats: **journalises localement** sur le Raspberry Pi
-
-- [src/main.py](src/main.py) - point d entree
-- [src/walle_vision/cli.py](src/walle_vision/cli.py) - profil RubikPi unique
-- [src/walle_vision/camera.py](src/walle_vision/camera.py) - capture camera RubikPi via GStreamer
-- [src/walle_vision/detector.py](src/walle_vision/detector.py) - inference YOLO PyTorch
-- [src/walle_vision/pipeline.py](src/walle_vision/pipeline.py) - orchestration capture -> inference -> export
-- [src/walle_vision/tracking.py](src/walle_vision/tracking.py) - suivi temporel
-- [src/walle_vision/visualization.py](src/walle_vision/visualization.py) - annotation des images
-
-## Sorties
-
-- `outputs/detections.jsonl` - detections stables
-- `outputs/predict/` - images annotees
-- `outputs/camera_test/` - frames de verification si activees
-
-## Notes
-### Prochaine etape
-
-La prochaine branche devra exposer un serveur TCP sur le PC pour recevoir les frames JPEG, executer le modele, puis renvoyer un JSON de resultats par frame.
-
-## Dependances
-
-- `opencv-python-headless` - camera + compression JPEG
-- **outputs/predict/** - images annotees avec boxes detectees
-- **outputs/detections.jsonl** - journal structure avec les detections stables
-
-## Dependances
-
-- `ultralytics>=8.3.0` - YOLO inference
-- `opencv-python>=4.10` - lecture/dessin d'images
-- `numpy>=2.0` - data structures
-
-
-## Branche PC
-
-La branche PC utilise une entree dediee et ses propres dependances:
-
-```bash
-pip install -r requirements-pc.txt
-python src/pc_main.py
-```
-
-Par defaut, le serveur ecoute sur `0.0.0.0:5000` et renvoie des resultats JSONL dans `outputs/detections.jsonl`.
-
-Optional:
-- `picamera2` - camera CSI Raspberry Pi
-
-Centraliser le projet sur RubikPi 3 avec ONNX Runtime pour l'inference.
+- Le point d'entrée ne contient pas de logique métier, uniquement le chargement de configuration et la sélection du pipeline.
+- La caméra et l'inférence sont découplées afin de ne pas bloquer la capture pendant le traitement.
+- Le streaming réseau conserve un format commun entre client et serveur pour faciliter le debug et l'archivage.
+- Le `tracking` est appliqué après l'inférence pour rendre les sorties plus stables d'une frame à l'autre.
