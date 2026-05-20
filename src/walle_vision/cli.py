@@ -23,19 +23,19 @@ class PiRuntimeConfig:
     source: str = "0"
     output_dir: str = "outputs"
 
-    width: int = 640
-    height: int = 640
+    width: int = 1280
+    height: int = 720
     fps: int = 30
 
     show: bool = False
-    pc_host: str = "192.168.1.10"
+    pc_host: str = "192.168.137.1"
     pc_port: int = 5000
 
     jpeg_quality: int = 80
     reconnect_delay_sec: float = 2.0
     max_inflight_frames: int = 2
 
-    camera_test_mode: bool = False
+    camera_test_mode: bool = True
     camera_test_interval_sec: float = 5.0
 
 def _parse_source(source: str) -> int | str:

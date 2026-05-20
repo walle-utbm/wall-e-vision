@@ -72,7 +72,7 @@ class CameraStream:
             self._backend = "picamera2"
             self._picam2 = Picamera2(source)
             config = self._picam2.create_video_configuration(
-                main={"size": (width, height), "format": "RGB888"},
+                main={"size": (width, height), "format": "BGR888"},
                 buffer_count=2,
             )
             self._picam2.configure(config)
@@ -125,10 +125,13 @@ class CameraStream:
                             "Check that picamera2/libcamera is installed and the camera is accessible."
                         )
                     break
-                if frame.ndim == 3 and frame.shape[2] == 3:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                elif frame.ndim == 3 and frame.shape[2] == 4:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+                
+                if frame.ndim == 3:
+                    if frame.shape[2] == 4:
+                        frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+                    elif frame.shape[2] == 3:
+                        # Inversion des canaux Rouge et Bleu (RGB -> BGR)
+                        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
                 
                 # Add small delay to reduce thermal stress on Arducam IMX708
                 time.sleep(0.01)
@@ -141,6 +144,7 @@ class CameraStream:
                             "Check that the camera is connected and accessible (V4L2/libcamera)."
                         )
                     break
+
             ts = time.time()
             idx = self._frame_index
             self._frame_index += 1

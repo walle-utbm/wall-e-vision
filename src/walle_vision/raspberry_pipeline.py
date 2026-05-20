@@ -11,6 +11,7 @@ import os
 import queue
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 import cv2
@@ -61,8 +62,15 @@ class RaspberryVisionPipeline:
         self._last_test_frame_save_time = 0.0
         self._last_rendered_frame: object | None = None
         self._last_result_summary = "waiting for PC"
+        self._last_debug_summary = "fps=0.0"
         self._received_results = 0
         self._sent_frames = 0
+        self._inflight_frames = 0
+        self._inflight_condition = threading.Condition()
+        self._timing_lock = threading.Lock()
+        self._pending_frames: dict[int, dict[str, float]] = {}
+        self._sent_samples: deque[float] = deque()
+        self._received_samples: deque[float] = deque()
 
     def run(self) -> None:
         """Capture frames and stream them to the PC until interrupted."""
@@ -100,7 +108,13 @@ class RaspberryVisionPipeline:
                 except OSError:
                     stop_event.set()
                     break
-                self._handle_remote_message(message)
+                received_wall = time.time()
+                received_mono = time.perf_counter()
+                with self._inflight_condition:
+                    if self._inflight_frames > 0:
+                        self._inflight_frames -= 1
+                    self._inflight_condition.notify_all()
+                self._handle_remote_message(message, received_wall, received_mono)
 
         try:
             while not stop_event.is_set():
@@ -135,7 +149,29 @@ class RaspberryVisionPipeline:
                     self._last_test_frame_save_time = timestamp
                     print(f"📷 Camera test frame saved: {test_frame_path.name}")
 
-                channel.send_frame(frame_index, timestamp, frame, self.jpeg_quality)
+                with self._inflight_condition:
+                    while self._inflight_frames >= self.max_inflight_frames and not stop_event.is_set():
+                        self._inflight_condition.wait(timeout=0.1)
+                    if stop_event.is_set():
+                        break
+
+                send_started_wall = time.time()
+                send_duration_sec = channel.send_frame(frame_index, timestamp, frame, self.jpeg_quality)
+                send_finished_wall = time.time()
+                send_finished_mono = time.perf_counter()
+                capture_age_ms = max(0.0, (send_started_wall - timestamp) * 1000.0)
+                send_total_ms = send_duration_sec * 1000.0
+                with self._timing_lock:
+                    self._pending_frames[frame_index] = {
+                        "capture_age_ms": capture_age_ms,
+                        "send_total_ms": send_total_ms,
+                        "send_finished_wall": send_finished_wall,
+                        "send_finished_mono": send_finished_mono,
+                    }
+                    self._sent_samples.append(send_finished_mono)
+                    self._trim_samples(self._sent_samples, send_finished_mono)
+                with self._inflight_condition:
+                    self._inflight_frames += 1
                 self._sent_frames += 1
                 self._last_rendered_frame = frame
 
@@ -157,7 +193,7 @@ class RaspberryVisionPipeline:
             if self.show:
                 cv2.destroyAllWindows()
 
-    def _handle_remote_message(self, message: TransportMessage) -> None:
+    def _handle_remote_message(self, message: TransportMessage, received_wall: float, received_mono: float) -> None:
         """Store one remote result packet locally and print a short status line."""
         if message.header.get("kind") != "result":
             return
@@ -168,13 +204,48 @@ class RaspberryVisionPipeline:
             print(f"⚠️ Invalid result payload received from PC: {exc}")
             return
 
+        frame_index = payload.get("frame_index")
+        pending = None
+        if isinstance(frame_index, int):
+            with self._timing_lock:
+                pending = self._pending_frames.pop(frame_index, None)
+                self._received_samples.append(received_mono)
+                self._trim_samples(self._received_samples, received_mono)
+
         self._received_results += 1
-        self._last_result_summary = f"frame {payload.get('frame_index', '?')} -> {len(payload.get('detections', []))} detections"
+        detection_count = len(payload.get("detections", []))
+        self._last_result_summary = f"frame {payload.get('frame_index', '?')} -> {detection_count} detections"
+
+        debug_parts: list[str] = []
+        if pending is not None:
+            roundtrip_ms = max(0.0, (received_wall - pending["send_finished_wall"]) * 1000.0)
+            debug_parts.append(f"capture={pending['capture_age_ms']:.1f}ms")
+            debug_parts.append(f"send={pending['send_total_ms']:.1f}ms")
+            debug_parts.append(f"rtt={roundtrip_ms:.1f}ms")
+
+        server_timing = payload.get("timing")
+        if isinstance(server_timing, dict):
+            for key in ("processing_ms", "inference_ms", "model_ms"):
+                value = server_timing.get(key)
+                if isinstance(value, (int, float)):
+                    debug_parts.append(f"pc={float(value):.1f}ms")
+                    break
+
+        if isinstance(payload.get("processing_ms"), (int, float)):
+            debug_parts.append(f"pc={float(payload['processing_ms']):.1f}ms")
+
+        with self._timing_lock:
+            sent_fps = float(len(self._sent_samples))
+            received_fps = float(len(self._received_samples))
+
+        debug_parts.append(f"fps_tx={sent_fps:.1f}")
+        debug_parts.append(f"fps_rx={received_fps:.1f}")
+        self._last_debug_summary = " | ".join(debug_parts)
 
         with self.results_jsonl.open("a", encoding="utf-8") as file:
             file.write(json.dumps(payload, ensure_ascii=True) + os.linesep)
 
-        print(f"📡 Result received: {self._last_result_summary}")
+        print(f"📡 Result received: {self._last_result_summary} | {self._last_debug_summary}")
 
     def _render_status_overlay(self, frame: object | None = None) -> None:
         """Render a light status overlay when the display flag is enabled."""
@@ -192,7 +263,7 @@ class RaspberryVisionPipeline:
 
         cv2.putText(
             annotated,
-            f"sent={self._sent_frames} received={self._received_results} {self._last_result_summary}",
+            f"sent={self._sent_frames} received={self._received_results} {self._last_result_summary} {self._last_debug_summary}",
             (16, 32),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
@@ -204,3 +275,9 @@ class RaspberryVisionPipeline:
         cv2.imshow("wall-e-vision", annotated)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             raise KeyboardInterrupt
+
+    def _trim_samples(self, samples: deque[float], now: float, window_sec: float = 1.0) -> None:
+        """Keep only samples from the last `window_sec` seconds."""
+        cutoff = now - window_sec
+        while samples and samples[0] < cutoff:
+            samples.popleft()

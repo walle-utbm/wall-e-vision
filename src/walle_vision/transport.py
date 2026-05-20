@@ -12,6 +12,7 @@ import json
 import socket
 import struct
 import threading
+import time
 from typing import Any
 
 import cv2
@@ -84,23 +85,27 @@ class StreamChannel:
         """Open a TCP connection to the PC receiver."""
         self._socket = socket.create_connection((self.host, self.port), timeout=self.timeout_sec)
         self._socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self._socket.settimeout(0.25)
+        # Keep writes blocking so large JPEG frames are not aborted by a short
+        # global socket timeout. Read operations apply their own timeout.
+        self._socket.settimeout(None)
 
     @property
     def connected(self) -> bool:
         return self._socket is not None
 
-    def send_packet(self, header: dict[str, Any], body: bytes = b"") -> None:
-        """Send one framed packet on the TCP stream."""
+    def send_packet(self, header: dict[str, Any], body: bytes = b"") -> float:
+        """Send one framed packet on the TCP stream and return the send duration."""
         if self._socket is None:
             raise ConnectionError("Transport channel is not connected")
 
         packet = encode_packet(header, body)
+        send_started = time.perf_counter()
         with self._write_lock:
             self._socket.sendall(packet)
+        return time.perf_counter() - send_started
 
-    def send_frame(self, frame_index: int, timestamp: float, frame: np.ndarray, jpeg_quality: int) -> None:
-        """Encode and send one camera frame."""
+    def send_frame(self, frame_index: int, timestamp: float, frame: np.ndarray, jpeg_quality: int) -> float:
+        """Encode and send one camera frame and return the send duration."""
         body = encode_frame_to_jpeg(frame, jpeg_quality)
         header = {
             "kind": "frame",
@@ -110,20 +115,25 @@ class StreamChannel:
             "shape": list(frame.shape),
             "dtype": str(frame.dtype),
         }
-        self.send_packet(header, body)
+        return self.send_packet(header, body)
 
     def receive_message(self, timeout_sec: float | None = None) -> TransportMessage:
         """Receive one framed packet from the TCP stream."""
-        if self._socket is None:
+        sock = self._socket
+        if sock is None:
             raise ConnectionError("Transport channel is not connected")
 
-        previous_timeout = self._socket.gettimeout()
+        previous_timeout = sock.gettimeout()
         try:
             if timeout_sec is not None:
-                self._socket.settimeout(timeout_sec)
-            return decode_packet(self._socket)
+                sock.settimeout(timeout_sec)
+            return decode_packet(sock)
         finally:
-            self._socket.settimeout(previous_timeout)
+            if self._socket is not None:
+                try:
+                    self._socket.settimeout(previous_timeout)
+                except OSError:
+                    pass
 
     def close(self) -> None:
         """Close the TCP socket."""

@@ -103,7 +103,7 @@ class PiRuntimeConfig:
 	height: int = 640
 	fps: int = 30                          # frames par seconde
 	show: bool = False                     # afficher la capture en local
-	pc_host: str = "192.168.1.10"          # IP du PC
+	pc_host: str = "192.168.137.1"          # IP du PC
 	pc_port: int = 5000                    # port TCP d'entree PC
 	jpeg_quality: int = 80                 # compression JPEG avant envoi
 ```
