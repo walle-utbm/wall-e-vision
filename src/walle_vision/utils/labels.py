@@ -19,7 +19,6 @@ CLASS_NAMES = [
     "Straw",
 ]
 
-# yellow: recyclable (french yellow bin), glass: glass-only bin, other: residual or specific handling.
 SORTING_MAP = {
     "Plastic bottle": "yellow",
     "Glass bottle": "glass",
