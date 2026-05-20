@@ -17,7 +17,7 @@ from .pipeline import VisionPipeline
 class RubikPiRuntimeConfig:
     """Runtime profile optimized for RubikPi 3 (Snapdragon 8 Gen1 + IMX708)."""
 
-    model: str = "model/best.pt"
+    model: str = "model/best.onnx"
     source: str = (
         "gstreamer:qtiqmmfsrc camera=0 ! "
         "video/x-raw,format=NV12,width=1280,height=720,framerate=30/1 ! "
@@ -28,7 +28,7 @@ class RubikPiRuntimeConfig:
 
     conf: float = 0.10
     iou: float = 0.45
-    imgsz: int = 640
+    imgsz: int = 512
     max_det: int = 12
 
     width: int = 1280

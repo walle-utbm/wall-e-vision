@@ -1,11 +1,11 @@
 # wall-e-vision
 
-Pipeline de vision temps reel pour RubikPi 3. Le modele YOLO detecte les dechets, puis les classe dans une categorie de tri:
+Mettre en place une pipeline de vision temps reel pour RubikPi 3. Detecter les dechets avec YOLO, puis les classer dans une categorie de tri:
 - yellow: recyclable
 - glass: verre
 - other: dechet residuel
 
-Cette branche est simplifiee pour un seul profil RubikPi.
+Conserver une seule branche RubikPi.
 
 ## Installation
 
@@ -22,35 +22,52 @@ pip install -r requirements.txt
 
 ## Lancement
 
-Depuis la racine du projet:
+Depuis la racine du projet, lancer:
 
 ```bash
 python src/main.py
 ```
 
-Le profil RubikPi 3 utilise par defaut:
-- modele: `model/best.pt`
-- resolution inference: `768`
-- camera: pipeline GStreamer `qtiqmmfsrc` par defaut, avec `appsink name=sink` pour la capture Python
+## Comment ca marche
+
+Chainer le traitement ainsi:
+1. Envoyer les images de la camera RubikPi via un pipeline GStreamer `qtiqmmfsrc` + `appsink`.
+2. Lire les frames dans `src/walle_vision/camera.py` et les transmettre au pipeline.
+3. Lancer l'inference YOLO dans `src/walle_vision/detector.py`.
+4. Stabiliser les detections dans le temps avec `src/walle_vision/tracking.py`.
+5. Ecrire les resultats dans `outputs/` et sauvegarder des images annotees depuis `src/walle_vision/pipeline.py`.
+
+Utiliser par defaut:
+- modele: `model/best.onnx` genere depuis `model/best.pt`
+- resolution inference: `512`
+- camera: pipeline GStreamer `qtiqmmfsrc` + `appsink name=sink` pour la capture Python
 - sortie: `outputs/`
 
-Si `gst-launch-1.0 qtiqmmfsrc ...` fonctionne sur ta machine, le pipeline Python utilise la meme pile par defaut. Le pipeline attendu termine par `appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true`.
+Terminer le pipeline par `appsink name=sink emit-signals=false sync=false max-buffers=1 drop=true`.
 
 ## Configuration
 
-Les reglages se trouvent dans [src/walle_vision/cli.py](src/walle_vision/cli.py). Modifie `RubikPiRuntimeConfig` si tu veux ajuster:
+Ouvrir [src/walle_vision/cli.py](src/walle_vision/cli.py) et modifier `RubikPiRuntimeConfig` pour ajuster:
 - `imgsz`
 - `fps`
 - `conf`
 - `infer_every`
 - `show`
-- `camera_test_mode` si tu veux reactiver les frames de verification
+- `camera_test_mode` pour generer des frames de verification
+
+Limiter le backend camera a `qtiqmmfsrc` + `appsink`.
+
+## Pourquoi `gi`
+
+Utiliser `gi` comme pont Python vers GStreamer. Charger `Gst` directement depuis Python, demarrer le pipeline `qtiqmmfsrc`, et lire les images dans `appsink` sans passer par un autre moteur de capture.
+
+Faire communiquer le code Python avec la pile GStreamer systeme de RubikPi via `gi`.
 
 ## Fichiers utiles
 
 - [src/main.py](src/main.py) - point d entree
 - [src/walle_vision/cli.py](src/walle_vision/cli.py) - profil RubikPi unique
-- [src/walle_vision/camera.py](src/walle_vision/camera.py) - capture video/camera RubikPi
+- [src/walle_vision/camera.py](src/walle_vision/camera.py) - capture camera RubikPi via GStreamer
 - [src/walle_vision/detector.py](src/walle_vision/detector.py) - inference YOLO PyTorch
 - [src/walle_vision/pipeline.py](src/walle_vision/pipeline.py) - orchestration capture -> inference -> export
 - [src/walle_vision/tracking.py](src/walle_vision/tracking.py) - suivi temporel
@@ -64,4 +81,4 @@ Les reglages se trouvent dans [src/walle_vision/cli.py](src/walle_vision/cli.py)
 
 ## Notes
 
-Le projet est volontairement centre sur RubikPi 3 avec PyTorch.
+Centraliser le projet sur RubikPi 3 avec ONNX Runtime pour l'inference.

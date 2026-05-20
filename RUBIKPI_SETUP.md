@@ -18,7 +18,9 @@
 
 - Ubuntu 24.04 ou plus recent sur RubikPi 3
 - Python 3.11+
-- camera IMX708 accessible via `picamera2` et `python3-libcamera`
+- camera IMX708 accessible via la pile GStreamer RubikPi (`qtiqmmfsrc` + `appsink`) et les bindings Python `gi`
+
+`gi` est necessaire parce qu'il fournit les bindings Python de GObject/GStreamer. Le projet l'utilise pour ouvrir le pipeline camera directement depuis Python et recuperer les frames dans `appsink`.
 
 ## Installation
 
@@ -35,11 +37,11 @@ deb http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted univers
 EOF
 sudo apt update
 
-# Python + pip
-sudo apt install -y python3 python3-venv python3-dev python3-pip
+# Python + pip + bindings GStreamer
+sudo apt install -y python3 python3-venv python3-dev python3-pip python3-gi gir1.2-gstreamer-1.0 gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
 
-# picamera2 pour la camera IMX708
-pip install picamera2
+# Verifie que la pile camera RubikPi fournit bien qtiqmmfsrc
+gst-inspect-1.0 qtiqmmfsrc
 ```
 
 ### Cloner le repository
@@ -80,30 +82,29 @@ Tu peux ajuster notamment:
 
 ## Remarques
 
-- Le modele par defaut est `model/best.pt`
+- Le modele par defaut est `model/best.onnx`, genere depuis `model/best.pt`
 - Les sorties sont ecrites dans `outputs/`
-- Cette branche utilise uniquement le modele PyTorch `model/best.pt`
+- Cette branche utilise le modele PyTorch pour l'export initial, puis ONNX Runtime pour l'execution CPU
 - Le profil par defaut utilise un pipeline GStreamer `qtiqmmfsrc` avec `appsink name=sink` pour la camera
+
+## Performance
+
+Le modele ONNX lance a `512` pixels d'entree offre un bien meilleur compromis vitesse / qualite que le chemin PyTorch de reference sur RubikPi 3.
+
+## Fonctionnement
+
+Le projet demarre un pipeline camera, alimente l'inference YOLO sur chaque frame, stabilise les detections sur quelques images, puis ecrit les resultats stables dans `outputs/detections.jsonl` et les images annotees dans `outputs/predict/`.
 
 ## Depannage camera
 
-Si `libcamera-hello` est introuvable, installe les outils systeme de diagnostic:
-
-```bash
-sudo apt install -y libcamera-tools
-```
-
-Si le script affiche `No camera was detected by libcamera`, alors la pile Python fonctionne mais aucun capteur n'est visible. Verifie alors:
+Si le pipeline ne demarre pas, verifie alors:
 
 - le branchement du cable CSI
 - l'activation de la camera dans le firmware / l'OS
-- la presence du paquet systeme `python3-libcamera`
+- la presence de `qtiqmmfsrc` via `gst-inspect-1.0 qtiqmmfsrc`
 
-Tu peux aussi tester la detection avec:
+Tu peux aussi tester la couche GStreamer avec:
 
 ```bash
-python - <<'PY'
-from picamera2 import Picamera2
-print(Picamera2.global_camera_info())
-PY
+gst-launch-1.0 qtiqmmfsrc camera=0 ! fakesink
 ```

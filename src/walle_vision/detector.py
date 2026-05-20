@@ -7,6 +7,7 @@ project's normalized `Detection` objects.
 """
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import List
 
@@ -30,8 +31,38 @@ class DetectorConfig:
     max_detections: int = 8
     use_half: bool = False
     device: str = "cpu"
-    workers: int = 2
+    workers: int = 0
     box_scale: float = 1.0
+
+
+def _resolve_model_path(model_path: Path) -> Path:
+    """Prefer an ONNX export when it exists, otherwise fall back to PyTorch."""
+    if model_path.suffix == ".pt":
+        preferred_paths = [model_path.with_suffix(".onnx"), model_path]
+    elif model_path.suffix == ".onnx":
+        preferred_paths = [model_path, model_path.with_suffix(".pt")]
+    else:
+        preferred_paths = [model_path]
+
+    for candidate in preferred_paths:
+        if candidate.exists():
+            return candidate
+
+    raise FileNotFoundError(f"Model not found: {model_path}")
+
+
+def _configure_torch_runtime() -> None:
+    """Use a reasonable CPU thread budget when PyTorch is the active backend."""
+    cpu_count = os.cpu_count() or 1
+    try:
+        torch.set_num_threads(max(1, min(cpu_count, 8)))
+    except Exception:
+        pass
+
+    try:
+        torch.set_num_interop_threads(1)
+    except Exception:
+        pass
 
 
 class WasteDetector:
@@ -39,11 +70,11 @@ class WasteDetector:
 
     def __init__(self, cfg: DetectorConfig) -> None:
         self.cfg = cfg
-        model_path = Path(cfg.model_path)
+        model_path = _resolve_model_path(Path(cfg.model_path))
         self.class_names: dict[int, str] = {}
 
-        if not model_path.exists():
-            raise FileNotFoundError(f"Model not found: {model_path}")
+        if model_path.suffix == ".pt":
+            _configure_torch_runtime()
 
         self.model = YOLO(str(model_path))
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 """Camera capture utilities.
 
-This module provides a tiny abstraction over camera backends so the rest
-of the project can consume frames as a simple Python generator.
-Supports the RubikPi IMX708 camera, webcams, and video files.
+This module provides a tiny abstraction over the RubikPi GStreamer camera
+backend so the rest of the project can consume frames as a simple Python
+generator.
 """
 
 import sys
@@ -18,19 +18,11 @@ import numpy as np
 def _add_system_site_packages() -> None:
     """Expose distro-installed bindings to the venv when Python cannot see them.
 
-    This is needed on RubikPi because `picamera2` and `gi` are often installed
-    by the OS package manager rather than inside the project virtualenv.
+    Only the two paths that matter on the RubikPi runtime are kept here.
     """
-    major = sys.version_info.major
-    minor = sys.version_info.minor
     candidates = [
         Path("/usr/lib/python3/dist-packages"),
-        Path(f"/usr/lib/python3.{major}/dist-packages"),
-        Path(f"/usr/local/lib/python3.{major}/dist-packages"),
-        Path(f"/usr/lib/aarch64-linux-gnu/python{major}.{minor}/site-packages"),
-        Path(f"/usr/local/lib/aarch64-linux-gnu/python{major}.{minor}/site-packages"),
-        Path(f"/usr/lib/python3.{minor}/dist-packages"),
-        Path(f"/usr/local/lib/python3.{minor}/dist-packages"),
+        Path("/usr/lib/aarch64-linux-gnu/python3.12/site-packages"),
     ]
     for path in candidates:
         if path.exists():
@@ -42,10 +34,7 @@ def _add_system_site_packages() -> None:
 def _load_gstreamer_bindings() -> tuple[object | None, object | None]:
     """Import GStreamer bindings, with a venv fallback to system packages.
 
-    OpenCV's GStreamer backend is not reliable in this project environment, so
-    we keep a direct `gi.repository.Gst` path available as a second capture
-    option. If the venv cannot import `gi`, we retry after exposing the system
-    `dist-packages` paths.
+    The project uses a direct `gi.repository.Gst` path for capture.
     """
     try:
         import gi  # type: ignore
@@ -57,16 +46,17 @@ def _load_gstreamer_bindings() -> tuple[object | None, object | None]:
         return gi, Gst
     except Exception:
         _add_system_site_packages()
-        try:
-            import gi  # type: ignore
 
-            gi.require_version("Gst", "1.0")
-            from gi.repository import Gst  # type: ignore
+    try:
+        import gi  # type: ignore
 
-            Gst.init(None)
-            return gi, Gst
-        except Exception:
-            return None, None
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst  # type: ignore
+
+        Gst.init(None)
+        return gi, Gst
+    except Exception:
+        return None, None
 
 
 gi, Gst = _load_gstreamer_bindings()
@@ -143,10 +133,7 @@ class CameraStream:
 
     def __init__(self, source: int | str = 0, width: int = 640, height: int = 640, fps: int = 30) -> None:
         if Gst is None:
-            raise RuntimeError(
-                "GStreamer Python bindings are not available. "
-                "Install the system GStreamer packages or expose them to the virtualenv."
-            )
+            raise RuntimeError("GStreamer Python bindings are not available")
 
         if isinstance(source, str) and source.isdigit():
             source = int(source)
@@ -163,10 +150,7 @@ class CameraStream:
 
         self._capture = _GStreamerAppsinkCapture(pipeline, width, height)
         if not self._capture.isOpened():
-            raise RuntimeError(
-                f"Unable to open GStreamer camera pipeline: {pipeline}. "
-                "Check qtiqmmfsrc, appsink, and device access."
-            )
+            raise RuntimeError(f"Unable to open GStreamer camera pipeline: {pipeline}")
 
         self._frame_index = 0
 

@@ -2,6 +2,5 @@
 ultralytics==8.4
 opencv-python-headless
 numpy==2.4.4
-
-# Optional: For ArduCAM/IMX708 support
-picamera2>=0.3.0  # Raspberry Pi camera library
+onnx>=1.21.0
+onnxruntime>=1.26.0
