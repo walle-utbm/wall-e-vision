@@ -48,6 +48,15 @@ def _as_source(value: Any) -> int | str:
     return str(value)
 
 
+def _resolve_hardware_section(data: dict[str, Any], hardware: str) -> dict[str, Any]:
+    resolved = {key: value for key, value in data.items() if key not in VALID_HARDWARE}
+    hardware_specific = data.get(hardware, {}) or {}
+    if not isinstance(hardware_specific, dict):
+        raise TypeError(f"Expected a mapping for '{hardware}' hardware settings")
+    resolved.update(hardware_specific)
+    return resolved
+
+
 @dataclass(slots=True)
 class PathSettings:
     model_dir: Path = Path("model")
@@ -179,8 +188,12 @@ def load_config(config_path: Path) -> AppConfig:
     paths_raw = raw.get("paths", {}) or {}
     model_paths = raw.get("models", {}) or {}
 
+    hardware = _as_str(raw.get("hardware"), "pc")
+    camera_raw = _resolve_hardware_section(raw.get("camera", {}) or {}, hardware)
+    detector_raw = _resolve_hardware_section(raw.get("detector", {}) or {}, hardware)
+
     return AppConfig(
-        hardware=_as_str(raw.get("hardware"), "pc"),
+        hardware=hardware,
         camera_type=_as_str(raw.get("camera_type"), "none"),
         mode=_as_str(raw.get("mode"), "edge_standalone"),
         paths=PathSettings(
@@ -188,8 +201,8 @@ def load_config(config_path: Path) -> AppConfig:
             output_dir=Path(_as_str(paths_raw.get("output_dir"), "outputs")),
         ),
         model_paths={str(key): str(value) for key, value in model_paths.items()},
-        camera=_build_camera_settings(raw.get("camera", {}) or {}),
-        detector=_build_detector_settings(raw.get("detector", {}) or {}),
+        camera=_build_camera_settings(camera_raw),
+        detector=_build_detector_settings(detector_raw),
         runtime=_build_runtime_settings(raw.get("runtime", {}) or {}),
         network=_build_network_settings(raw.get("network", {}) or {}),
         config_dir=config_path.resolve().parent,

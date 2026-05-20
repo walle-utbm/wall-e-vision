@@ -192,8 +192,8 @@ Le fichier [config.yaml](config.yaml) est la source de vérité.
 
 - `paths`: emplacements des modèles et des sorties.
 - `models`: nom du modèle à utiliser par matériel.
-- `camera`: source, résolution, FPS et warmup.
-- `detector`: seuils et options YOLO.
+- `camera`: peut définir un profil commun et des surcharges par matériel (`rubikpi3`, `rpi4`, `pc`).
+- `detector`: idem pour les seuils, `image_size` et les options YOLO.
 - `runtime`: affichage, fréquence d'inférence et mode test caméra.
 - `network`: adresse serveur, client, qualité JPEG et limites d'in-flight.
 

@@ -1,4 +1,4 @@
-hardware: rpi4
+hardware: rubikpi3
 camera_type: picamera
 mode: edge_standalone
 
@@ -12,27 +12,44 @@ models:
   pc: best.pt
 
 camera:
-  source: 0
-  width: 640
-  height: 640
-  fps: 30
-  warmup_frames: 3
+  rubikpi3:
+    source: 0
+    width: 1280
+    height: 720
+    fps: 30
+    warmup_frames: 3
+  rpi4:
+    source: 0
+    width: 640
+    height: 640
+    fps: 30
+    warmup_frames: 3
 
 detector:
-  conf_threshold: 0.10
-  iou_threshold: 0.45
-  image_size: 640
-  max_detections: 8
-  use_half: false
-  device: cpu
-  workers: 0
-  force_pytorch: false
+  rubikpi3:
+    conf_threshold: 0.10
+    iou_threshold: 0.45
+    image_size: 512
+    max_detections: 8
+    use_half: false
+    device: cpu
+    workers: 0
+    force_pytorch: false
+  rpi4:
+    conf_threshold: 0.10
+    iou_threshold: 0.45
+    image_size: 640
+    max_detections: 8
+    use_half: false
+    device: cpu
+    workers: 0
+    force_pytorch: false
 
 runtime:
   show: false
   infer_every_n_frames: 1
   save_every_n_frames: 10
-  camera_test_mode: false
+  camera_test_mode: true
   camera_test_interval_sec: 5.0
 
 network:
