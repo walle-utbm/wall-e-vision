@@ -21,9 +21,8 @@ class DetectorConfig:
     model_path: str = "model/best.pt"
     conf_threshold: float = 0.1
     iou_threshold: float = 0.45
-    image_size: int = 640
+    image_size: int | tuple[int, int] = 640
     max_detections: int = 8
-    use_half: bool = True
     device: str = "cpu"
 
 
@@ -47,6 +46,15 @@ class WasteDetector:
                 self.names = getattr(self.model, "names", {}) or {}
             except Exception:
                 self.names = {}
+            # Debug: confirm model loaded and show basic info
+            try:
+                short_names = list(self.names.values()) if isinstance(self.names, dict) else list(self.names)
+                preview = short_names[:10]
+                print(f"ultralytics YOLO model loaded from '{cfg.model_path}'")
+                print(f" - device: {cfg.device}, image_size: {cfg.image_size}")
+                print(f" - classes (preview): {preview}{'...' if len(short_names) > 10 else ''} (total {len(short_names)})")
+            except Exception:
+                print("ultralytics YOLO model loaded (names unavailable)")
         except Exception:
             print("ultralytics not available — detector will be a no-op")
 

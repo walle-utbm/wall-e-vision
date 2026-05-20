@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import os
 import socket
+import signal
+import threading
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,7 +33,7 @@ class PCRuntimeConfig:
 
     conf: float = 0.10
     iou: float = 0.45
-    imgsz: int = 640
+    imgsz: tuple[int, int] = (1280, 720)
     max_det: int = 8
 
     track_iou: float = 0.35
@@ -39,7 +42,6 @@ class PCRuntimeConfig:
     track_window: int = 5
 
     show: bool = False
-    half: bool = True
     device: str = "cpu"
 
 
@@ -55,7 +57,6 @@ class PCVisionServer:
                 iou_threshold=cfg.iou,
                 image_size=cfg.imgsz,
                 max_detections=cfg.max_det,
-                use_half=cfg.half,
                 device=cfg.device,
             )
         )
@@ -71,30 +72,66 @@ class PCVisionServer:
         self.results_jsonl = self.output_dir / "detections.jsonl"
         self.predict_dir = self.output_dir / "predict"
         self.predict_dir.mkdir(parents=True, exist_ok=True)
+        # Event used to request shutdown from signal handler or other threads
+        self.stop_event = threading.Event()
 
     def run(self) -> None:
         """Start the TCP server and process clients until interrupted."""
+        # Install signal handlers to request graceful shutdown
+        def _signal_handler(sig, frame):
+            print("Signal received, shutting down server...")
+            self.stop_event.set()
+
+        signal.signal(signal.SIGINT, _signal_handler)
+        try:
+            signal.signal(signal.SIGTERM, _signal_handler)
+        except Exception:
+            # SIGTERM may not be available on some platforms (e.g. Windows)
+            pass
+
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_socket:
             server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_socket.bind((self.cfg.host, self.cfg.port))
             server_socket.listen(1)
+            server_socket.settimeout(1.0)  # make accept interruptible
             print(f"PC server listening on {self.cfg.host}:{self.cfg.port}")
 
             try:
-                while True:
+                while not self.stop_event.is_set():
                     print("Waiting for Raspberry Pi client...")
-                    client_socket, address = server_socket.accept()
+                    try:
+                        client_socket, address = server_socket.accept()
+                    except socket.timeout:
+                        continue
+                    except OSError:
+                        break
+
                     print(f"Client connected from {address[0]}:{address[1]}")
+                    # make client socket receive calls timeout so we can exit promptly
+                    try:
+                        client_socket.settimeout(1.0)
+                    except Exception:
+                        pass
+
                     with client_socket:
+                        # handle client until it disconnects or stop_event is set
                         self._handle_client(StreamConnection(client_socket))
-            except KeyboardInterrupt:
+            finally:
                 print("PC server stopped")
+                try:
+                    cv2.destroyAllWindows()
+                except Exception:
+                    pass
 
     def _handle_client(self, connection: StreamConnection) -> None:
         """Process a connected Raspberry Pi client."""
         try:
-            while True:
-                message = connection.receive_message()
+            while not self.stop_event.is_set():
+                try:
+                    message = connection.receive_message()
+                except socket.timeout:
+                    # check stop_event periodically
+                    continue
                 if message.header.get("kind") != "frame":
                     continue
 
@@ -118,6 +155,9 @@ class PCVisionServer:
             print("Client disconnected")
         except KeyboardInterrupt:
             print("PC client session interrupted")
+        except Exception as exc:
+            # unexpected errors should be logged but shouldn't crash the server
+            print(f"Client handler error: {exc}")
         finally:
             connection.close()
 

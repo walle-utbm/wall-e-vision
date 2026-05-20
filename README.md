@@ -69,7 +69,7 @@ class PCRuntimeConfig:
     output_dir: str = "outputs"
     conf: float = 0.10
     iou: float = 0.45
-    imgsz: int = 640
+	imgsz: tuple[int, int] = (1280, 720)
     max_det: int = 8
 ```
 
