@@ -31,7 +31,8 @@ class StreamServerPipeline:
         self.config = config
         self.detector = WasteDetector(
             DetectorConfig(
-                model_path=str(config.resolve_model_path()),
+                model_path=None if config.detector.backend == "edge_impulse_http" else str(config.resolve_model_path()),
+                backend=config.detector.backend,
                 conf_threshold=config.detector.conf_threshold,
                 iou_threshold=config.detector.iou_threshold,
                 image_size=config.detector.image_size,
@@ -40,6 +41,9 @@ class StreamServerPipeline:
                 device=config.detector.device,
                 workers=config.detector.workers,
                 force_pytorch=config.detector.force_pytorch,
+                edge_impulse_url=config.detector.edge_impulse_url,
+                edge_impulse_timeout_sec=config.detector.edge_impulse_timeout_sec,
+                debug_inference=config.runtime.debug_inference,
             )
         )
         self.output_dir = Path(config.config_dir / config.paths.output_dir)

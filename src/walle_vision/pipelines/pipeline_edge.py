@@ -23,7 +23,8 @@ class EdgeStandalonePipeline:
         self.camera = CameraStream.create(config.hardware, config.camera_type, config.camera)
         self.detector = WasteDetector(
             DetectorConfig(
-                model_path=str(config.resolve_model_path()),
+                model_path=None if config.detector.backend == "edge_impulse_http" else str(config.resolve_model_path()),
+                backend=config.detector.backend,
                 conf_threshold=config.detector.conf_threshold,
                 iou_threshold=config.detector.iou_threshold,
                 image_size=config.detector.image_size,
@@ -32,6 +33,9 @@ class EdgeStandalonePipeline:
                 device=config.detector.device,
                 workers=config.detector.workers,
                 force_pytorch=config.detector.force_pytorch,
+                edge_impulse_url=config.detector.edge_impulse_url,
+                edge_impulse_timeout_sec=config.detector.edge_impulse_timeout_sec,
+                debug_inference=config.runtime.debug_inference,
             )
         )
         self.output_dir = Path(config.config_dir / config.paths.output_dir)
@@ -134,6 +138,10 @@ class EdgeStandalonePipeline:
                 cv2.destroyAllWindows()
 
     def _append_result(self, frame_index: int, timestamp: float, detections: list[Detection]) -> None:
+        if not detections:
+            print(f"Frame {frame_index} @ {timestamp:.2f}s: No detections")
+            return
+        print(f"Frame {frame_index} @ {timestamp:.2f}s: Detected {detections[0].class_name} objects, confidences {[round(d.confidence, 3) for d in detections]}")
         payload = {
             "frame_index": frame_index,
             "timestamp": timestamp,
