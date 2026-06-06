@@ -12,6 +12,7 @@ import yaml
 VALID_HARDWARE = {"rpi4", "rubikpi3", "pc"}
 VALID_CAMERA_TYPES = {"picamera", "usb", "none"}
 VALID_MODES = {"edge_standalone", "stream_client", "stream_server"}
+VALID_DETECTOR_BACKENDS = {"ultralytics", "edge_impulse_http", "pysnpe"}
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -74,7 +75,8 @@ class CameraSettings:
 
 @dataclass(slots=True)
 class DetectorSettings:
-    conf_threshold: float = 0.30
+    backend: str = "ultralytics"
+    conf_threshold: float = 0.1
     iou_threshold: float = 0.45
     image_size: int = 640
     max_detections: int = 8
@@ -82,6 +84,8 @@ class DetectorSettings:
     device: str = "cpu"
     workers: int = 0
     force_pytorch: bool = False
+    edge_impulse_url: str = "http://127.0.0.1:1337"
+    edge_impulse_timeout_sec: float = 5.0
 
 
 @dataclass(slots=True)
@@ -91,6 +95,7 @@ class RuntimeSettings:
     save_every_n_frames: int = 10
     camera_test_mode: bool = False
     camera_test_interval_sec: float = 5.0
+    debug_inference: bool = False
 
 
 @dataclass(slots=True)
@@ -147,7 +152,12 @@ def _build_camera_settings(data: dict[str, Any]) -> CameraSettings:
 
 
 def _build_detector_settings(data: dict[str, Any]) -> DetectorSettings:
+    backend = _as_str(data.get("backend"), "ultralytics")
+    if backend not in VALID_DETECTOR_BACKENDS:
+        raise ValueError(f"Unsupported detector backend '{backend}'")
+
     return DetectorSettings(
+        backend=backend,
         conf_threshold=_as_float(data.get("conf_threshold"), 0.30),
         iou_threshold=_as_float(data.get("iou_threshold"), 0.45),
         image_size=_as_int(data.get("image_size"), 640),
@@ -156,6 +166,8 @@ def _build_detector_settings(data: dict[str, Any]) -> DetectorSettings:
         device=_as_str(data.get("device"), "cpu"),
         workers=_as_int(data.get("workers"), 0),
         force_pytorch=_as_bool(data.get("force_pytorch"), False),
+        edge_impulse_url=_as_str(data.get("edge_impulse_url"), "http://127.0.0.1:1337"),
+        edge_impulse_timeout_sec=_as_float(data.get("edge_impulse_timeout_sec"), 5.0),
     )
 
 
@@ -166,6 +178,7 @@ def _build_runtime_settings(data: dict[str, Any]) -> RuntimeSettings:
         save_every_n_frames=_as_int(data.get("save_every_n_frames"), 10),
         camera_test_mode=_as_bool(data.get("camera_test_mode"), False),
         camera_test_interval_sec=_as_float(data.get("camera_test_interval_sec"), 5.0),
+        debug_inference=_as_bool(data.get("debug_inference"), False),
     )
 
 

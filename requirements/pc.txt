@@ -1,3 +1,0 @@
--r base.txt
-ultralytics>=8.3.0
-opencv-python>=4.10

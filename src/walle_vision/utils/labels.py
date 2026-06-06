@@ -17,6 +17,9 @@ CLASS_NAMES = [
     "Printing industry",
     "Plastic bottle cap",
     "Straw",
+    "verre",
+    "jaune",
+    "noir",
 ]
 
 SORTING_MAP = {
@@ -34,4 +37,8 @@ SORTING_MAP = {
     "Printing industry": "yellow",
     "Plastic bottle cap": "yellow",
     "Straw": "other",
+    # Mapping des poubelles 
+    "verre": "bin_glass",
+    "jaune": "bin_yellow",
+    "noir": "bin_other",
 }

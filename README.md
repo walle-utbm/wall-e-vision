@@ -1,182 +1,203 @@
 # wall-e-vision
 
-Architecture unifiée pour la vision du robot Wall-E. Le dépôt expose un point d'entrée unique, [main.py](main.py), qui lit [config.yaml](config.yaml) puis instancie automatiquement le bon pipeline selon le matériel, le type de caméra et le mode d'exécution.
+Wall-e-vision est le dépôt de vision du robot Wall-E. Le projet expose un point d'entrée unique, [main.py](main.py), qui charge [config.yaml](config.yaml), choisit le pipeline adapté au matériel et au mode d'exécution, puis lance la boucle principale.
 
-## Vue d'ensemble
+## Objectif du projet
 
-Le refactor sépare le projet en quatre couches:
+Le dépôt regroupe la capture caméra, l'inférence d'objets, le transport réseau et l'export des résultats dans une architecture unique. L'objectif est de pouvoir exécuter le même code dans plusieurs contextes:
 
-- `core` pour l'acquisition caméra.
-- `ai` pour le chargement du modèle YOLO et l'inférence.
-- `network` pour l'échange TCP des frames et des résultats.
-- `pipelines` pour assembler les briques selon le mode choisi.
+- inférence locale sur la carte embarquée;
+- capture locale et inférence sur un PC distant;
+- exécution Edge Impulse via un serveur HTTP local.
+
+## Architecture
+
+Le code est organisé en quatre blocs.
+
+- `core` gère l'acquisition vidéo.
+- `ai` gère le chargement du modèle et l'inférence.
+- `network` gère le protocole TCP et le transport des frames JPEG.
+- `pipelines` assemble les briques selon le mode choisi.
+
+Le reste du dépôt contient les utilitaires d'affichage, le mapping des labels et les fichiers de configuration.
 
 ## Modes d'exécution
 
 ### `edge_standalone`
 
-Mode d'inférence locale. La capture vidéo et l'inférence YOLO tournent sur la même machine.
+Ce mode fait tourner la capture et l'inférence sur la même machine.
 
-Cas d'usage:
+Comportement principal:
 
-- Raspberry Pi 4 avec modèle `.pt`.
-- Rubik Pi 3 avec modèle `.onnx`.
-
-Comportement:
-
-- la caméra est consommée dans un thread dédié;
-- les frames sont traitées en continu par le détecteur local;
-- les résultats peuvent être écrits dans `outputs/detections.jsonl`;
+- la caméra est ouverte dans un backend dédié;
+- les frames sont récupérées dans un thread séparé pour ne pas bloquer la capture;
+- le détecteur est exécuté localement;
+- les détections sont écrites dans `outputs/detections.jsonl` seulement lorsqu'au moins un objet est détecté;
 - les images annotées peuvent être enregistrées dans `outputs/predict/`;
-- l'affichage OpenCV est optionnel via `runtime.show`.
+- l'affichage OpenCV reste optionnel via `runtime.show`.
+
+Ce mode est utilisé pour:
+
+- Raspberry Pi 4 avec modèle local `.pt`;
+- Rubik Pi 3 avec modèle local `.onnx` ou avec un backend Edge Impulse HTTP.
 
 ### `stream_client`
 
-Mode de capture et de streaming.
-- le pc et le raspberry doivent être connectés au même réseau. 
-- penser à changer l'ip du serveur donc du pc.
+Ce mode capture localement et envoie les frames à un PC via TCP.
 
-Cas d'usage:
+Comportement principal:
 
-- Raspberry Pi qui n'exécute pas l'IA localement;
-- envoi des frames JPEG vers le PC via TCP.
-
-Comportement:
-
-- la caméra capture localement dans un thread dédié;
-- les frames sont compressées en JPEG avant l'envoi;
-- le client maintient une file d'in-flight limitée par `network.max_inflight_frames`;
-- les résultats renvoyés par le PC sont stockés dans `outputs/remote_results.jsonl`;
-- l'affichage peut superposer un résumé réseau et latence.
+- la caméra est ouverte sur la machine cliente;
+- chaque frame est compressée en JPEG;
+- les frames sont envoyées au serveur PC;
+- les réponses du serveur sont stockées dans `outputs/remote_results.jsonl`;
+- le client limite le nombre de frames en vol avec `network.max_inflight_frames`.
 
 ### `stream_server`
 
-Mode serveur PC.
+Ce mode reçoit les frames sur un PC et exécute l'inférence côté serveur.
 
-- le pc et le raspberry doivent être connectés au même réseau. 
-
-Cas d'usage:
-
-- PC de bureau recevant les frames depuis le Raspberry Pi client;
-- inférence YOLO côté serveur sur les frames reçues.
-
-Comportement:
+Comportement principal:
 
 - le serveur écoute sur `network.host:network.port`;
-- il reçoit des frames JPEG encapsulées dans un protocole TCP simple;
-- il décode, infère, tracke puis renvoie les résultats au client;
-- les résultats sont archivés dans `outputs/detections.jsonl`;
-- les images annotées sont sauvegardées dans `outputs/predict/`.
+- il reçoit des frames JPEG via un protocole TCP simple;
+- il les décode en OpenCV;
+- il exécute le détecteur;
+- il renvoie les résultats au client;
+- il archive les résultats dans `outputs/detections.jsonl` et les images annotées dans `outputs/predict/`.
 
-## Types de caméra
+## Edge Impulse
 
-Le backend caméra est centralisé dans [src/walle_vision/core/camera.py](src/walle_vision/core/camera.py).
+Le dépôt prend aussi en charge un backend `edge_impulse_http`.
+
+Dans ce mode:
+
+- [main.py](main.py) démarre automatiquement le runner Edge Impulse en HTTP local si l'URL configurée pointe vers `127.0.0.1`, `localhost` ou `0.0.0.0`;
+- le runner expose l'API sur `/api/info` et `/api/image`;
+- le code Python envoie les images au runner et récupère les prédictions;
+- le seuil du runner est fixé à `0.1` au démarrage automatique actuel;
+- la sortie du runner est volontairement silencieuse pour éviter les logs de debug dans la console.
+
+Point important: si le fichier `.eim` correspond à un modèle de classification, la réponse Edge Impulse ne contient pas forcément de bounding boxes. Dans ce cas, le code conserve la meilleure classe et la transforme en détection pleine image. Pour obtenir de vraies bounding boxes, le modèle Edge Impulse doit être exporté en détection d'objets.
+
+### Téléchargement du modèle
+```
+edge-impulse-linux-runner --clean --download /home/ubuntu/walle/wall-e-vision/model/model.eim
+``` 
+
+## Caméras
+
+La création de caméra est centralisée dans [src/walle_vision/core/camera.py](src/walle_vision/core/camera.py).
 
 ### `picamera`
 
-Destiné aux caméras CSI.
+Backend destiné aux caméras CSI.
 
 Comportement:
 
 - tente d'abord `Picamera2` quand elle est disponible;
 - sur Rubik Pi 3, le backend GStreamer peut être utilisé;
-- le paramètre `camera.warmup_frames` permet de stabiliser l'exposition avant la boucle principale.
+- `camera.warmup_frames` permet de stabiliser l'exposition avant la boucle principale.
 
 ### `usb`
 
-Caméra USB classique via OpenCV.
+Backend OpenCV classique.
 
 Comportement:
 
 - ouvre la source avec `cv2.VideoCapture`;
-- applique `width`, `height`, `fps` et un buffer minimal;
-- convient aux webcams, UVC et périphériques exposés par index ou par URL.
+- applique largeur, hauteur, FPS et buffer minimal quand c'est possible;
+- convient aux webcams UVC, aux indices de périphériques et aux sources URL.
 
 ### `none`
 
-Mode sans caméra réelle.
+Backend sans caméra réelle.
 
-Usage:
+Comportement:
 
-- utile pour certains tests réseau ou pour des scénarios où la caméra est gérée ailleurs;
-- la création de frames est volontairement interdite dans ce backend.
+- aucune frame n'est produite;
+- ce backend sert aux cas où la caméra est gérée ailleurs ou aux tests réseau.
 
-## Détection YOLO
+## Détection
 
-Le moteur d'inférence est unifié dans [src/walle_vision/ai/detector.py](src/walle_vision/ai/detector.py).
+Le moteur d'inférence est défini dans [src/walle_vision/ai/detector.py](src/walle_vision/ai/detector.py).
 
-Points importants:
+### Modèles supportés
 
-- le modèle est choisi depuis `models` dans [config.yaml](config.yaml);
-- `rpi4` et `pc` pointent vers un modèle `.pt`;
-- `rubikpi3` pointe vers un modèle `.onnx`;
-- si le fichier configuré n'existe pas, le détecteur tente l'extension alternative compatible;
-- les paramètres `detector.conf_threshold`, `detector.iou_threshold`, `detector.image_size` et `detector.max_detections` pilotent l'inférence;
-- le tracking temporel est appliqué après l'inférence pour stabiliser les résultats.
+- `.pt` via Ultralytics;
+- `.onnx` via ONNX Runtime pour le chemin local;
+- `.eim` via le backend Edge Impulse HTTP;
+- `.dlc` via l'API PySNPE (QAIRT) de Qualcomm pour exécution accélérée sur le NPU (HTP) du Rubik Pi 3.
+
+### Paramètres importants
+
+- `detector.conf_threshold` contrôle le seuil de confiance;
+- `detector.iou_threshold` contrôle le filtrage des boîtes;
+- `detector.image_size` fixe la taille d'entrée du modèle;
+- `detector.max_detections` limite le nombre de résultats conservés;
+- `detector.backend` choisit entre `ultralytics`, `edge_impulse_http` et `pysnpe`.
+
+### Logique d'exécution
+
+- les modèles `.pt` passent par Ultralytics;
+- les modèles `.onnx` passent par un décodage direct de la sortie pour éviter les mauvaises interprétations du wrapper;
+- les modèles `.dlc` utilisent l'API Qualcomm PySNPE. L'entrée subit un redimensionnement et une normalisation Float32 (0-1). Après l'inférence sur le NPU, les tenseurs de sortie INT8 sont automatiquement déquantifiés (Float = (INT8 - offset) * scale) avant d'être passés au post-traitement agnostique;
+- les réponses Edge Impulse sont décodées depuis JSON;
+- si le backend Edge Impulse renvoie une classification pure, le résultat est converti en détection pleine image.
 
 ## Pipelines
 
 ### [pipeline_edge.py](src/walle_vision/pipelines/pipeline_edge.py)
 
-Pipeline complet pour les modes standalone.
+Pipeline principal pour l'exécution locale.
 
 Responsabilités:
 
 - créer la caméra;
-- charger le détecteur local;
-- exécuter le tracker;
-- produire les résultats et les images annotées.
+- créer le détecteur;
+- récupérer les frames en continu;
+- exécuter l'inférence au rythme défini par la config;
+- écrire les résultats utiles dans `outputs/`.
 
-Spécificités:
+Points pratiques:
 
-- la capture est découplée de l'inférence via une file mémoire courte;
-- `runtime.infer_every_n_frames` permet de réduire la charge CPU;
-- `runtime.save_every_n_frames` contrôle la fréquence d'export des images annotées;
+- `runtime.infer_every_n_frames` réduit la charge CPU;
+- `runtime.save_every_n_frames` contrôle la fréquence des exports d'images annotées;
 - `runtime.camera_test_mode` permet de sauvegarder périodiquement des frames brutes pour diagnostic.
 
 ### [pipeline_client.py](src/walle_vision/pipelines/pipeline_client.py)
 
-Pipeline client du mode streaming.
+Pipeline client pour le mode streaming.
 
 Responsabilités:
 
 - capturer les frames;
 - les compresser en JPEG;
-- les envoyer au PC;
-- recevoir les résultats et mettre à jour les métriques réseau.
-
-Spécificités:
-
-- le client limite le nombre de frames en vol pour éviter la saturation mémoire;
-- les reconnexions utilisent `network.reconnect_delay_sec`;
-- les timings de capture, d'envoi et de retour sont affichés dans la sortie console;
-- le fichier `outputs/remote_results.jsonl` centralise les réponses du serveur.
+- les envoyer au serveur PC;
+- recevoir les réponses;
+- suivre les métriques de latence et de débit.
 
 ### [pipeline_server.py](src/walle_vision/pipelines/pipeline_server.py)
 
-Pipeline serveur PC.
+Pipeline serveur pour le mode streaming.
 
 Responsabilités:
 
 - écouter les connexions entrantes;
 - décoder les frames JPEG;
-- exécuter YOLO localement;
+- exécuter l'inférence;
 - renvoyer les résultats au client.
 
-Spécificités:
+Le serveur traite les clients séquentiellement et s'arrête proprement avec les signaux système standard.
 
-- le serveur traite les clients séquentiellement;
-- la fermeture propre passe par les signaux SIGINT et SIGTERM;
-- les résultats sont serialisés dans un format JSON stable partagé avec le client.
+## Sorties générées
 
-## Arborescence utile
+Les fichiers et dossiers principaux sont les suivants.
 
-- [src/walle_vision/core/camera.py](src/walle_vision/core/camera.py) contient la factory caméra et les backends OpenCV, Picamera2 et GStreamer.
-- [src/walle_vision/ai/detector.py](src/walle_vision/ai/detector.py) contient le chargement YOLO `.pt` et `.onnx`.
-- [src/walle_vision/network/transport.py](src/walle_vision/network/transport.py) contient le protocole TCP et l'encodage JPEG.
-- [src/walle_vision/pipelines/](src/walle_vision/pipelines/) contient les trois pipelines métiers.
-- [src/walle_vision/utils/visualization.py](src/walle_vision/utils/visualization.py) gère l'affichage des détections.
-- [src/walle_vision/utils/labels.py](src/walle_vision/utils/labels.py) gère le mapping métier des classes.
+- `outputs/detections.jsonl` pour les détections locales ou serveur.
+- `outputs/remote_results.jsonl` pour les résultats reçus par le client streaming.
+- `outputs/predict/` pour les images annotées.
+- `outputs/camera_test/` pour les frames brutes de diagnostic quand `runtime.camera_test_mode` est activé.
 
 ## Configuration
 
@@ -191,13 +212,13 @@ Le fichier [config.yaml](config.yaml) est la source de vérité.
 ### Sections secondaires
 
 - `paths`: emplacements des modèles et des sorties.
-- `models`: nom du modèle à utiliser par matériel.
-- `camera`: peut définir un profil commun et des surcharges par matériel (`rubikpi3`, `rpi4`, `pc`).
-- `detector`: idem pour les seuils, `image_size` et les options YOLO.
-- `runtime`: affichage, fréquence d'inférence et mode test caméra.
-- `network`: adresse serveur, client, qualité JPEG et limites d'in-flight.
+- `models`: nom du modèle à utiliser pour chaque matériel.
+- `camera`: profils caméra par matériel.
+- `detector`: backend, seuils et paramètres d'inférence.
+- `runtime`: affichage, fréquence d'inférence, mode test caméra.
+- `network`: hôte, ports, qualité JPEG et limites réseau.
 
-### Exemple de choix par profil
+### Exemple de profils
 
 ```yaml
 # Raspberry Pi 4 autonome
@@ -205,12 +226,12 @@ hardware: rpi4
 camera_type: picamera
 mode: edge_standalone
 
-# Rubik Pi 3 autonome
+# Rubik Pi 3 autonome avec Edge Impulse
 hardware: rubikpi3
 camera_type: picamera
 mode: edge_standalone
 
-# Client Raspberry Pi qui stream vers le PC
+# Client qui envoie les images au PC
 hardware: rpi4
 camera_type: picamera
 mode: stream_client
@@ -220,25 +241,6 @@ hardware: pc
 camera_type: none
 mode: stream_server
 ```
-
-## Sorties générées
-
-Selon le mode, le projet écrit principalement:
-
-- `outputs/detections.jsonl` pour les résultats locaux ou serveur;
-- `outputs/remote_results.jsonl` pour les réponses reçues par le client;
-- `outputs/predict/` pour les images annotées;
-- `outputs/camera_test/` quand `runtime.camera_test_mode` est activé.
-
-## Dépendances
-
-Les dépendances sont séparées par cible:
-
-- [requirements/base.txt](requirements/base.txt) pour le socle commun;
-- [requirements/edge.txt](requirements/edge.txt) pour les modes embarqués;
-- [requirements/pc.txt](requirements/pc.txt) pour le serveur PC.
-
-Le projet s'appuie notamment sur `ultralytics`, `opencv-python`, `numpy` et `PyYAML`. Selon la plateforme, `picamera2` et le support GStreamer peuvent aussi être nécessaires.
 
 ## Installation
 
@@ -252,20 +254,70 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+### Accélération matérielle Rubik Pi 3 (QAIRT / PySNPE)
+
+Pour utiliser le backend `pysnpe` pour exploiter le NPU (HTP) du Rubik Pi 3 avec des modèles `.dlc`, il faut installer le SDK Qualcomm AI Runtime (QAIRT) et son wrapper Python, car `pysnpe` n'est pas disponible sur PyPI.
+
+**1. Installation des bibliothèques système sur le Rubik Pi 3**
+Exécuter ce script fourni par Qualcomm / Edge Impulse pour installer les bibliothèques C++ d'inférence (`libQnnHtp.so`, etc.) :
+```bash
+wget -qO- https://cdn.edgeimpulse.com/qc-ai-docs/device-setup/install_ai_runtime_sdk.sh | bash
+source ~/.bash_profile
+```
+
+**2. Installation du wrapper pysnpe_utils**
+Le module Python qui encapsule l'API C++ fait partie du SDK Qualcomm (ou du Qualcomm Innovators Development Kit - QIDK). Vous devez récupérer les sources et l'installer dans votre environnement virtuel :
+```bash
+# Clonez les outils QIDK (qui contiennent pysnpe_utils)
+git clone https://github.com/qualcomm/qidk.git
+cd qidk/Tools/pysnpe_utils
+
+# Assurez-vous que l'environnement virtuel wall-e-vision est actif
+# source /home/walle/wall-e-vision/.venv/bin/activate
+
+# Installez le package
+pip install .
+```
+*Note: Le backend exige que la variable d'environnement `SNPE_ROOT` (ou `QAIRT_ROOT`) soit définie et que les dépendances système soient satisfaites pour accéder au DSP/HTP.*
+
 ## Lancement
 
-Le lancement se fait toujours depuis la racine:
+Le lancement se fait depuis la racine du dépôt.
 
 ```bash
 source .venv/bin/activate
 python main.py
 ```
 
-Le code charge [config.yaml](config.yaml), construit automatiquement le pipeline approprié puis lance sa méthode `run()`.
+Le point d'entrée charge la configuration, démarre automatiquement le runner Edge Impulse si le backend configuré le demande, puis lance le pipeline adapté.
 
-## Notes d'architecture
+## Dépendances
 
-- Le point d'entrée ne contient pas de logique métier, uniquement le chargement de configuration et la sélection du pipeline.
-- La caméra et l'inférence sont découplées afin de ne pas bloquer la capture pendant le traitement.
-- Le streaming réseau conserve un format commun entre client et serveur pour faciliter le debug et l'archivage.
-- Le `tracking` est appliqué après l'inférence pour rendre les sorties plus stables d'une frame à l'autre.
+Les dépendances sont séparées par cible.
+
+- [requirements/base.txt](requirements/base.txt) pour le socle commun.
+- [requirements/edge.txt](requirements/edge.txt) pour les modes embarqués.
+- [requirements/pc.txt](requirements/pc.txt) pour le serveur PC.
+
+Le projet s'appuie principalement sur `ultralytics`, `opencv-python`, `numpy`, `PyYAML` et `onnxruntime` selon le chemin d'exécution.
+
+## Points de débogage utiles
+
+- Si la caméra ne démarre pas, vérifier `camera_type`, `source` et l'exposition du périphérique caméra.
+- Si Edge Impulse ne répond pas, vérifier que le runner HTTP local est bien lancé sur l'URL configurée.
+- Si aucune détection n'apparaît, vérifier le modèle chargé, le backend choisi et `detector.conf_threshold`.
+- Si le modèle Edge Impulse est un classifieur, l'absence de bounding boxes est normale.
+
+## Fichiers utiles
+
+- [src/walle_vision/core/camera.py](src/walle_vision/core/camera.py)
+- [src/walle_vision/ai/detector.py](src/walle_vision/ai/detector.py)
+- [src/walle_vision/network/transport.py](src/walle_vision/network/transport.py)
+- [src/walle_vision/pipelines/](src/walle_vision/pipelines/)
+- [src/walle_vision/utils/visualization.py](src/walle_vision/utils/visualization.py)
+- [src/walle_vision/utils/labels.py](src/walle_vision/utils/labels.py)
+
+## Documentation matérielle
+
+https://www.thundercomm.com/rubik-pi-3/en/docs/about-rubikpi/

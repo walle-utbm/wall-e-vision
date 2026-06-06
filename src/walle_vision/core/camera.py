@@ -13,54 +13,22 @@ import numpy as np
 
 from ..config import CameraSettings
 
-
-def _add_system_site_packages() -> None:
-    candidates = [
-        Path("/usr/lib/python3/dist-packages"),
-        Path("/usr/lib/python3.13/dist-packages"),
-        Path("/usr/local/lib/python3.13/dist-packages"),
-        Path("/usr/lib/aarch64-linux-gnu/python3.12/site-packages"),
-    ]
-    for path in candidates:
-        if path.exists():
-            path_str = str(path)
-            if path_str not in sys.path:
-                sys.path.append(path_str)
-
-
 try:
     from picamera2 import Picamera2
-except ImportError:  # pragma: no cover - optional dependency
-    _add_system_site_packages()
-    try:
-        from picamera2 import Picamera2
-    except ImportError:  # pragma: no cover - optional dependency
-        Picamera2 = None
-
+except ImportError:
+    Picamera2 = None
 
 def _load_gstreamer() -> tuple[object | None, object | None]:
     try:
-        import gi  # type: ignore
-
+        import gi
         gi.require_version("Gst", "1.0")
-        from gi.repository import Gst  # type: ignore
-
+        from gi.repository import Gst
         Gst.init(None)
         return gi, Gst
-    except Exception:
-        _add_system_site_packages()
-
-    try:
-        import gi  # type: ignore
-
-        gi.require_version("Gst", "1.0")
-        from gi.repository import Gst  # type: ignore
-
-        Gst.init(None)
-        return gi, Gst
-    except Exception:
+    except Exception as e:
+        # On affiche L'ERREUR EXACTE !
+        print(f"\n[ERREUR CRITIQUE GSTREAMER] : {e}\n")
         return None, None
-
 
 gi, Gst = _load_gstreamer()
 

@@ -1,6 +1,6 @@
 -r base.txt
-ultralytics==8.4
-picamera2>=0.3.0
-onnx>=1.21.0
-onnxruntime>=1.26.0
-ncnn>=1.0.20260114
+ultralytics
+picamera2
+onnx
+onnxruntime
+ncnn
