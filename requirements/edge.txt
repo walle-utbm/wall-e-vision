@@ -1,6 +1,4 @@
 -r base.txt
-ultralytics
-picamera2
 onnx
 onnxruntime
-ncnn
+pybind11>=2.5.0

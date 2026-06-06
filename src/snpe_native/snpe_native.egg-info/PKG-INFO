@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: snpe_native
+Version: 0.1.0
+Summary: SNPE PyBind11 wrapper for YOLO inference
+Requires-Dist: pybind11>=2.5.0
+Dynamic: requires-dist
+Dynamic: summary

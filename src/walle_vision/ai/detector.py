@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-"""YOLO inference layer."""
+"""Inference layer for the Rubik Pi 3 (NPU/DLC, ONNX and Edge Impulse backends)."""
 
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 from typing import List
 from urllib import error, request
@@ -12,37 +11,19 @@ from uuid import uuid4
 
 import cv2
 import numpy as np
-import torch
-from ultralytics import YOLO
 
 from ..types import Detection
 from .sorting import classify_recycle_bin
 
 
-def _configure_torch_runtime() -> None:
-    cpu_count = os.cpu_count() or 1
-    try:
-        torch.set_num_threads(max(1, min(cpu_count, 8)))
-    except Exception:
-        pass
-    try:
-        torch.set_num_interop_threads(1)
-    except Exception:
-        pass
-
-
 @dataclass(slots=True)
 class DetectorConfig:
     model_path: str | None = None
-    backend: str = "ultralytics"
-    conf_threshold: float = 0.30
+    backend: str = "pysnpe"
+    conf_threshold: float = 0.10
     iou_threshold: float = 0.45
     image_size: int = 640
     max_detections: int = 8
-    use_half: bool = False
-    device: str = "cpu"
-    workers: int = 0
-    force_pytorch: bool = False
     edge_impulse_url: str = "http://127.0.0.1:1337"
     edge_impulse_timeout_sec: float = 5.0
     debug_inference: bool = False
@@ -53,7 +34,6 @@ class WasteDetector:
         self.cfg = cfg
         self.class_names: dict[int, str] = {}
         self.label_to_class_id: dict[str, int] = {}
-        self.model = None
         self.onnx_session = None
         self.onnx_input_name = None
         self.onnx_input_size = cfg.image_size
@@ -93,48 +73,37 @@ class WasteDetector:
                 input_width = input_shape[3]
                 if isinstance(input_height, int) and isinstance(input_width, int) and input_height == input_width:
                     self.onnx_input_size = int(input_height)
+
+            from ..utils.labels import CLASS_NAMES
+            self.class_names = {i: name for i, name in enumerate(CLASS_NAMES)}
         elif self.model_path.suffix == ".dlc":
             try:
-                import pysnpe_utils
-                self.pysnpe_module = pysnpe_utils
+                import snpe_native
+                self.pysnpe_module = snpe_native
             except ImportError as exc:
-                raise RuntimeError("pysnpe_utils is required to run DLC detector models") from exc
+                raise RuntimeError("snpe_native is required to run DLC detector models. Please build it from src/snpe_native") from exc
 
-            # Initialisation directe de l'Engine via la surcouche PYBIND pour le DSP
-            self.snpe_engine = pysnpe_utils.Engine(str(self.model_path), runtime="DSP")
-
-            # Récupération dynamique du nom d'entrée si disponible, sinon "images" par défaut
-            input_names = getattr(self.snpe_engine, "get_input_names", lambda: ["images"])()
-            self.snpe_input_name = input_names[0] if input_names else "images"
+            self.snpe_engine = snpe_native.SnpeYoloDetector(str(self.model_path))
             
             self.snpe_input_size = cfg.image_size
             
-            # Utilise les labels par défaut pour les modèles DLC (YOLO n'est pas utilisé)
+            # Labels par défaut pour les modèles DLC (la sortie NPU ne porte pas les noms de classe).
             from ..utils.labels import CLASS_NAMES
             self.class_names = {i: name for i, name in enumerate(CLASS_NAMES)}
         else:
-            _configure_torch_runtime()
-            self.model = YOLO(str(self.model_path))
-            try:
-                self.model.fuse()
-            except Exception:
-                pass
-
-            self.class_names = {int(key): str(value) for key, value in getattr(self.model, "names", {}).items()}
+            raise ValueError(
+                f"Unsupported model format '{self.model_path.suffix}'. "
+                "Rubik Pi 3 supports .dlc (pysnpe), .onnx (onnxruntime) or Edge Impulse .eim."
+            )
 
     def _resolve_model_path(self, model_path: Path) -> Path:
         if model_path.exists():
             return model_path
         alternatives = []
-        if model_path.suffix == ".pt":
-            alternatives.append(model_path.with_suffix(".onnx"))
-            alternatives.append(model_path.with_suffix(".dlc"))
-        elif model_path.suffix == ".onnx":
-            alternatives.append(model_path.with_suffix(".pt"))
+        if model_path.suffix == ".onnx":
             alternatives.append(model_path.with_suffix(".dlc"))
         elif model_path.suffix == ".dlc":
             alternatives.append(model_path.with_suffix(".onnx"))
-            alternatives.append(model_path.with_suffix(".pt"))
         for candidate in alternatives:
             if candidate.exists():
                 return candidate
@@ -444,39 +413,102 @@ class WasteDetector:
         return detections
 
     def _infer_pysnpe(self, frame: np.ndarray) -> List[Detection]:
-        # Prépare la logique pour redimensionner en 640x640, convertir en RGB
+        # 1. Prépare l'image (Letterbox)
         padded_frame, scale, pad_left, pad_top = self._letterbox(frame, self.snpe_input_size)
         
-        # Formater les données en Float32 (normalisé 0-1)
+        # 2. Format Float32 (Normalisé 0-1)
         model_input = cv2.cvtColor(padded_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        model_input = np.transpose(model_input, (2, 0, 1))[np.newaxis, ...]
+        
+        # 3. Transposition virtuelle (NCHW)
+        model_input = np.transpose(model_input, (2, 0, 1))
+        
+        # 4. LE CORRECTIF MAGIQUE : Réécriture physique en mémoire RAM !
+        model_input = np.ascontiguousarray(model_input)[np.newaxis, ...]
 
-        # Exécution directe via la surcouche PYBIND (zéro copie possible)
-        outputs = self.snpe_engine.execute({self.snpe_input_name: model_input})
-
-        # Etape de déquantification
-        outputs_float = []
-        for name, out_tensor in outputs.items():
-            # Récupération sécurisée avec gestion de cas fallback si l'API pybind expose des getters ou attributs
-            data_raw = out_tensor.data if hasattr(out_tensor, "data") else out_tensor.get_data()
-            
-            # Vérifie si le tenseur retourné nécessite une déquantification
-            if data_raw.dtype in (np.int8, np.uint8):
-                scale_param = out_tensor.scale if hasattr(out_tensor, "scale") else out_tensor.get_scale()
-                offset_param = out_tensor.offset if hasattr(out_tensor, "offset") else out_tensor.get_offset()
-                
-                # Appliquer la formule Float = (INT8 - offset) * scale
-                data_float = (data_raw.astype(np.float32) - offset_param) * scale_param
+        # 5. Inférence NPU ultra-rapide
+        snpe_out = self.snpe_engine.infer(model_input)
+        
+        # Check if the output is a dictionary (multiple outputs) or a single array
+        if isinstance(snpe_out, dict):
+            if self.cfg.debug_inference:
+                print(f"DEBUG: snpe_out is a dict with keys: {snpe_out.keys()}")
+                for k, v in snpe_out.items():
+                    print(f"DEBUG: snpe_out['{k}'] shape: {v.shape}")
+                    print(f"DEBUG: {k} content: {v[0][0]}")
+            # If the user split the outputs to avoid quantization issues, we reconstruct them here.
+            # Assuming outputs are named 'boxes', 'conf', 'cls'
+            if 'boxes' in snpe_out and 'conf' in snpe_out and 'cls' in snpe_out:
+                boxes_arr = snpe_out['boxes'][0]
+                conf_arr = snpe_out['conf'][0]
+                cls_arr = snpe_out['cls'][0]
+                boxes = np.concatenate([boxes_arr, conf_arr, cls_arr], axis=-1)
             else:
-                data_float = data_raw.astype(np.float32)
+                # Fallback: take the first tensor in the dict
+                first_key = list(snpe_out.keys())[0]
+                boxes = snpe_out[first_key][0]
+        else:
+            if self.cfg.debug_inference:
+                print(f"DEBUG: snpe_out is a single array of shape: {snpe_out.shape}")
+                print(f"DEBUG: Boxes content: {snpe_out[0][0]}")
+            # Old behavior: snpe_out is a single array of shape (1, 300, 6)
+            boxes = snpe_out[0]
+
+        if self.cfg.debug_inference and len(boxes) > 0:
+            print(f"DEBUG 1ère boîte : {boxes[0]}")
+        
+        detections: List[Detection] = []
+        frame_height, frame_width = frame.shape[:2]
+        frame_area = float(frame_height * frame_width)
+
+        # 6. Décodage direct.
+        # YOLO26 est end-to-end (NMS-free) : chaque ligne est déjà
+        # [x1, y1, x2, y2, score, class] dans l'espace letterboxé 640x640.
+        # Pas de conversion cx,cy,w,h -> xyxy, pas de NMS à refaire.
+        for box in boxes:
+            x1, y1, x2, y2, conf, cls_id = box
+
+            # On ignore les boîtes sous le seuil
+            if conf < self.cfg.conf_threshold:
+                continue
+
+            # On ramène les coordonnées à l'image d'origine (avant le letterbox)
+            x1_orig = (x1 - pad_left) / scale
+            y1_orig = (y1 - pad_top) / scale
+            x2_orig = (x2 - pad_left) / scale
+            y2_orig = (y2 - pad_top) / scale
+            
+            # On arrondit et on clip aux bords de l'image
+            x1_i = max(0, int(round(x1_orig)))
+            y1_i = max(0, int(round(y1_orig)))
+            x2_i = min(frame_width - 1, int(round(x2_orig)))
+            y2_i = min(frame_height - 1, int(round(y2_orig)))
+            
+            # On vérifie que la boîte est valide
+            if x2_i <= x1_i or y2_i <= y1_i:
+                continue
                 
-            outputs_float.append(data_float)
-
-        if not outputs_float:
-            return []
-
-        # Les sorties déquantifiées sont passées à la logique agnostique existante
-        return self._postprocess_onnx([outputs_float[0]], frame)
+            class_id_int = int(cls_id)
+            class_name = self.class_names.get(class_id_int, str(class_id_int))
+            
+            box_width = max(1, x2_i - x1_i)
+            box_height = max(1, y2_i - y1_i)
+            center = (x1_i + box_width // 2, y1_i + box_height // 2)
+            
+            detections.append(
+                Detection(
+                    class_id=class_id_int,
+                    class_name=class_name,
+                    recycle_bin=classify_recycle_bin(class_name),
+                    confidence=float(conf),
+                    bbox=(x1_i, y1_i, x2_i, y2_i),
+                    center=center,
+                    pickup_point=center,
+                    area_ratio=(box_width * box_height) / frame_area,
+                    bbox_clipped=x1_i == 0 or y1_i == 0 or x2_i == frame_width - 1 or y2_i == frame_height - 1,
+                )
+            )
+            
+        return detections
 
     def infer(self, frame: np.ndarray) -> List[Detection]:
         if self.cfg.backend == "edge_impulse_http":
@@ -488,93 +520,9 @@ class WasteDetector:
         if self.model_path is not None and self.model_path.suffix == ".onnx" and self.onnx_session is not None and self.onnx_input_name is not None:
             padded_frame, _, _, _ = self._letterbox(frame, self.onnx_input_size)
             model_input = cv2.cvtColor(padded_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-            model_input = np.transpose(model_input, (2, 0, 1))[np.newaxis, ...]
+            # model_input = np.transpose(model_input, (2, 0, 1))[np.newaxis, ...]
+            # model_input = model_input[np.newaxis, ...]
             output = self.onnx_session.run(None, {self.onnx_input_name: model_input})[0]
             return self._postprocess_onnx(output, frame)
 
-        use_half = self.cfg.use_half and self.cfg.device not in {"cpu", "mps"}
-        results = self.model.predict(
-            source=frame,
-            conf=self.cfg.conf_threshold,
-            iou=self.cfg.iou_threshold,
-            imgsz=(self.cfg.image_size, self.cfg.image_size),
-            max_det=self.cfg.max_detections,
-            rect=False,
-            save=False,
-            save_txt=False,
-            save_crop=False,
-            save_conf=False,
-            half=use_half,
-            device=self.cfg.device,
-            verbose=False,
-            workers=self.cfg.workers,
-        )
-
-        if not results:
-            return []
-
-        result = results[0]
-        boxes = result.boxes
-        if boxes is None or boxes.xyxy is None:
-            return []
-
-        masks_xy = result.masks.xy if result.masks is not None and result.masks.xy is not None else []
-
-        detections: List[Detection] = []
-        frame_height, frame_width = frame.shape[:2]
-        frame_area = float(frame_height * frame_width)
-
-        for index in range(len(boxes)):
-            x1, y1, x2, y2 = boxes.xyxy[index].tolist()
-            confidence = float(boxes.conf[index].item())
-            class_id = int(boxes.cls[index].item())
-            class_name = result.names.get(class_id, str(class_id))
-
-            x1_i = max(0, int(x1))
-            y1_i = max(0, int(y1))
-            x2_i = min(frame_width - 1, int(x2))
-            y2_i = min(frame_height - 1, int(y2))
-
-            bbox_clipped = x1_i == 0 or y1_i == 0 or x2_i == frame_width - 1 or y2_i == frame_height - 1
-
-            box_width = max(1, x2_i - x1_i)
-            box_height = max(1, y2_i - y1_i)
-            area_ratio = (box_width * box_height) / frame_area
-            center = (x1_i + box_width // 2, y1_i + box_height // 2)
-
-            pickup_point = center
-            segmentation_available = False
-            mask_area_ratio = 0.0
-
-            if index < len(masks_xy):
-                polygon = np.asarray(masks_xy[index], dtype=np.float32)
-                if polygon.size >= 6:
-                    mask_area = float(abs(cv2.contourArea(polygon)))
-                    mask_area_ratio = mask_area / frame_area
-                    moments = cv2.moments(polygon)
-                    if moments["m00"] != 0:
-                        center_x = int(moments["m10"] / moments["m00"])
-                        center_y = int(moments["m01"] / moments["m00"])
-                        pickup_point = (
-                            max(0, min(frame_width - 1, center_x)),
-                            max(0, min(frame_height - 1, center_y)),
-                        )
-                        segmentation_available = True
-
-            detections.append(
-                Detection(
-                    class_id=class_id,
-                    class_name=class_name,
-                    recycle_bin=classify_recycle_bin(class_name),
-                    confidence=confidence,
-                    bbox=(x1_i, y1_i, x2_i, y2_i),
-                    center=center,
-                    pickup_point=pickup_point,
-                    area_ratio=area_ratio,
-                    mask_area_ratio=mask_area_ratio,
-                    segmentation_available=segmentation_available,
-                    bbox_clipped=bbox_clipped,
-                )
-            )
-
-        return detections
+        raise RuntimeError("Detector is not initialized with a supported backend")

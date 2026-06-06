@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Configuration loader for the unified runtime."""
+"""Configuration loader for the Rubik Pi 3 runtime."""
 
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -9,10 +9,10 @@ from typing import Any
 import yaml
 
 
-VALID_HARDWARE = {"rpi4", "rubikpi3", "pc"}
+VALID_HARDWARE = {"rubikpi3"}
 VALID_CAMERA_TYPES = {"picamera", "usb", "none"}
-VALID_MODES = {"edge_standalone", "stream_client", "stream_server"}
-VALID_DETECTOR_BACKENDS = {"ultralytics", "edge_impulse_http", "pysnpe"}
+VALID_MODES = {"edge_standalone"}
+VALID_DETECTOR_BACKENDS = {"pysnpe", "onnx", "edge_impulse_http"}
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -75,15 +75,11 @@ class CameraSettings:
 
 @dataclass(slots=True)
 class DetectorSettings:
-    backend: str = "ultralytics"
+    backend: str = "pysnpe"
     conf_threshold: float = 0.1
     iou_threshold: float = 0.45
     image_size: int = 640
     max_detections: int = 8
-    use_half: bool = False
-    device: str = "cpu"
-    workers: int = 0
-    force_pytorch: bool = False
     edge_impulse_url: str = "http://127.0.0.1:1337"
     edge_impulse_timeout_sec: float = 5.0
 
@@ -99,17 +95,6 @@ class RuntimeSettings:
 
 
 @dataclass(slots=True)
-class NetworkSettings:
-    host: str = "0.0.0.0"
-    port: int = 5000
-    client_host: str = "192.168.137.1"
-    client_port: int = 5000
-    jpeg_quality: int = 80
-    reconnect_delay_sec: float = 2.0
-    max_inflight_frames: int = 2
-
-
-@dataclass(slots=True)
 class AppConfig:
     hardware: str
     camera_type: str
@@ -119,7 +104,6 @@ class AppConfig:
     camera: CameraSettings = field(default_factory=CameraSettings)
     detector: DetectorSettings = field(default_factory=DetectorSettings)
     runtime: RuntimeSettings = field(default_factory=RuntimeSettings)
-    network: NetworkSettings = field(default_factory=NetworkSettings)
     config_dir: Path = Path(".")
 
     def __post_init__(self) -> None:
@@ -152,20 +136,16 @@ def _build_camera_settings(data: dict[str, Any]) -> CameraSettings:
 
 
 def _build_detector_settings(data: dict[str, Any]) -> DetectorSettings:
-    backend = _as_str(data.get("backend"), "ultralytics")
+    backend = _as_str(data.get("backend"), "pysnpe")
     if backend not in VALID_DETECTOR_BACKENDS:
         raise ValueError(f"Unsupported detector backend '{backend}'")
 
     return DetectorSettings(
         backend=backend,
-        conf_threshold=_as_float(data.get("conf_threshold"), 0.30),
+        conf_threshold=_as_float(data.get("conf_threshold"), 0.10),
         iou_threshold=_as_float(data.get("iou_threshold"), 0.45),
         image_size=_as_int(data.get("image_size"), 640),
         max_detections=_as_int(data.get("max_detections"), 8),
-        use_half=_as_bool(data.get("use_half"), False),
-        device=_as_str(data.get("device"), "cpu"),
-        workers=_as_int(data.get("workers"), 0),
-        force_pytorch=_as_bool(data.get("force_pytorch"), False),
         edge_impulse_url=_as_str(data.get("edge_impulse_url"), "http://127.0.0.1:1337"),
         edge_impulse_timeout_sec=_as_float(data.get("edge_impulse_timeout_sec"), 5.0),
     )
@@ -182,18 +162,6 @@ def _build_runtime_settings(data: dict[str, Any]) -> RuntimeSettings:
     )
 
 
-def _build_network_settings(data: dict[str, Any]) -> NetworkSettings:
-    return NetworkSettings(
-        host=_as_str(data.get("host"), "0.0.0.0"),
-        port=_as_int(data.get("port"), 5000),
-        client_host=_as_str(data.get("client_host"), "192.168.137.1"),
-        client_port=_as_int(data.get("client_port"), 5000),
-        jpeg_quality=_as_int(data.get("jpeg_quality"), 80),
-        reconnect_delay_sec=_as_float(data.get("reconnect_delay_sec"), 2.0),
-        max_inflight_frames=_as_int(data.get("max_inflight_frames"), 2),
-    )
-
-
 def load_config(config_path: Path) -> AppConfig:
     with config_path.open("r", encoding="utf-8") as file:
         raw = yaml.safe_load(file) or {}
@@ -201,7 +169,7 @@ def load_config(config_path: Path) -> AppConfig:
     paths_raw = raw.get("paths", {}) or {}
     model_paths = raw.get("models", {}) or {}
 
-    hardware = _as_str(raw.get("hardware"), "pc")
+    hardware = _as_str(raw.get("hardware"), "rubikpi3")
     camera_raw = _resolve_hardware_section(raw.get("camera", {}) or {}, hardware)
     detector_raw = _resolve_hardware_section(raw.get("detector", {}) or {}, hardware)
 
@@ -217,6 +185,5 @@ def load_config(config_path: Path) -> AppConfig:
         camera=_build_camera_settings(camera_raw),
         detector=_build_detector_settings(detector_raw),
         runtime=_build_runtime_settings(raw.get("runtime", {}) or {}),
-        network=_build_network_settings(raw.get("network", {}) or {}),
         config_dir=config_path.resolve().parent,
     )
