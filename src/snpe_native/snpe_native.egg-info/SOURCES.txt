@@ -1,0 +1,8 @@
+setup.py
+snpe_yolo_detector.cpp
+snpe_native.egg-info/PKG-INFO
+snpe_native.egg-info/SOURCES.txt
+snpe_native.egg-info/dependency_links.txt
+snpe_native.egg-info/not-zip-safe
+snpe_native.egg-info/requires.txt
+snpe_native.egg-info/top_level.txt

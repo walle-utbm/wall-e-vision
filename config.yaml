@@ -7,9 +7,7 @@ paths:
   output_dir: outputs
 
 models:
-  rpi4: best.pt
-  rubikpi3: best.pt # best.pt or best.onnx or best_final_npu.dlc
-  pc: best.pt
+  rubikpi3: best_final_npu.dlc # best.onnx, best_final_npu.dlc or model.eim
 
 camera:
   rubikpi3:
@@ -18,36 +16,14 @@ camera:
     height: 720
     fps: 30
     warmup_frames: 5
-  rpi4:
-    source: 0
-    width: 640
-    height: 640
-    fps: 30
-    warmup_frames: 3
 
 detector:
   rubikpi3:
-    backend: ultralytics # utralytics, edge_impulse_http or pysnpe
+    backend: pysnpe # pysnpe, onnx or edge_impulse_http
     conf_threshold: 0.1
     iou_threshold: 0.45
     image_size: 640
     max_detections: 8
-    use_half: false
-    device: cpu
-    workers: 0
-    force_pytorch: false
-    edge_impulse_url: http://127.0.0.1:1337
-    edge_impulse_timeout_sec: 5.0
-  rpi4:
-    backend: ultralytics
-    conf_threshold: 0.10
-    iou_threshold: 0.45
-    image_size: 640
-    max_detections: 8
-    use_half: false
-    device: cpu
-    workers: 0
-    force_pytorch: false
     edge_impulse_url: http://127.0.0.1:1337
     edge_impulse_timeout_sec: 5.0
 
@@ -58,12 +34,3 @@ runtime:
   camera_test_mode: true
   camera_test_interval_sec: 5.0
   debug_inference: true
-
-network:
-  host: 0.0.0.0
-  port: 5000
-  client_host: 192.168.137.1
-  client_port: 5000
-  jpeg_quality: 80
-  reconnect_delay_sec: 2.0
-  max_inflight_frames: 2

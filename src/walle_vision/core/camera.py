@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-"""Camera factory and backends for the unified runtime."""
+"""Camera factory and backends for the Rubik Pi 3 runtime."""
 
-import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Generator, Protocol
 
 import cv2
@@ -13,10 +11,6 @@ import numpy as np
 
 from ..config import CameraSettings
 
-try:
-    from picamera2 import Picamera2
-except ImportError:
-    Picamera2 = None
 
 def _load_gstreamer() -> tuple[object | None, object | None]:
     try:
@@ -54,7 +48,7 @@ class _NullCamera:
 
 
 class _OpenCVCamera:
-    def __init__(self, source: int | str, width: int, height: int, fps: int) -> None:
+    def __init__(self, source: int | str, width: int, height: int, fps: int, warmup_frames: int) -> None:
         self._source = source
         self._backend = cv2.VideoCapture(source, cv2.CAP_V4L2)
         if not self._backend.isOpened():
@@ -71,6 +65,9 @@ class _OpenCVCamera:
 
         if not self._backend.isOpened():
             raise RuntimeError(f"Unable to open camera source: {source}")
+
+        for _ in range(max(0, warmup_frames)):
+            self._backend.read()
 
     def _set_if_supported(self, prop_id: int, value: float) -> None:
         try:
@@ -94,47 +91,8 @@ class _OpenCVCamera:
         self._backend.release()
 
 
-class _Picamera2Camera:
-    def __init__(self, source: int | str, width: int, height: int, fps: int, warmup_frames: int) -> None:
-        if Picamera2 is None:
-            raise RuntimeError("picamera2 is not available")
-        self._source = source
-        self._camera = Picamera2(source if isinstance(source, int) else 0)
-        config = self._camera.create_video_configuration(
-            main={"size": (width, height), "format": "BGR888"},
-            buffer_count=2,
-        )
-        self._camera.configure(config)
-        self._camera.start()
-        for _ in range(max(0, warmup_frames)):
-            _ = self._camera.capture_array()
-            time.sleep(0.1)
-        self._frame_index = 0
-
-    def frames(self) -> Generator[tuple[int, float, np.ndarray], None, None]:
-        while True:
-            frame = self._camera.capture_array()
-            if frame is None:
-                if self._frame_index == 0:
-                    raise RuntimeError(f"Unable to read a frame from camera source: {self._source}")
-                break
-            if frame.ndim == 3:
-                if frame.shape[2] == 4:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
-                elif frame.shape[2] == 3:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            time.sleep(0.01)
-            timestamp = time.time()
-            frame_index = self._frame_index
-            self._frame_index += 1
-            yield frame_index, timestamp, frame
-
-    def close(self) -> None:
-        self._camera.stop()
-
-
 class _GStreamerCamera:
-    def __init__(self, source: int | str, width: int, height: int, fps: int) -> None:
+    def __init__(self, source: int | str, width: int, height: int, fps: int, warmup_frames: int) -> None:
         if Gst is None:
             raise RuntimeError("GStreamer Python bindings are not available")
         self._source = source
@@ -170,6 +128,9 @@ class _GStreamerCamera:
         if not self._opened:
             self._pipeline.set_state(Gst.State.NULL)
             raise RuntimeError(f"Unable to open GStreamer camera pipeline: {pipeline}")
+
+        for _ in range(max(0, warmup_frames)):
+            self._sink.emit("try-pull-sample", 2 * Gst.SECOND)
 
     def frames(self) -> Generator[tuple[int, float, np.ndarray], None, None]:
         while True:
@@ -207,13 +168,9 @@ class CameraStream:
         if camera_type == "none":
             backend: CameraBackend = _NullCamera(settings.source)
         elif camera_type == "usb":
-            backend = _OpenCVCamera(settings.source, settings.width, settings.height, settings.fps)
-        elif camera_type == "picamera" and hardware == "rubikpi3":
-            backend = _GStreamerCamera(settings.source, settings.width, settings.height, settings.fps)
-        elif camera_type == "picamera" and Picamera2 is not None:
-            backend = _Picamera2Camera(settings.source, settings.width, settings.height, settings.fps, settings.warmup_frames)
-        else:
-            backend = _OpenCVCamera(settings.source, settings.width, settings.height, settings.fps)
+            backend = _OpenCVCamera(settings.source, settings.width, settings.height, settings.fps, settings.warmup_frames)
+        else:  # picamera -> CSI camera through the Rubik Pi 3 GStreamer pipeline
+            backend = _GStreamerCamera(settings.source, settings.width, settings.height, settings.fps, settings.warmup_frames)
         return cls(backend)
 
     def frames(self) -> Generator[tuple[int, float, np.ndarray], None, None]:
@@ -221,9 +178,3 @@ class CameraStream:
 
     def close(self) -> None:
         self._backend.close()
-
-
-class CameraFactory:
-    @staticmethod
-    def create(hardware: str, camera_type: str, settings: CameraSettings) -> CameraStream:
-        return CameraStream.create(hardware, camera_type, settings)
