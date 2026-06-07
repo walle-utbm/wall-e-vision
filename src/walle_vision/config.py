@@ -62,6 +62,7 @@ def _resolve_hardware_section(data: dict[str, Any], hardware: str) -> dict[str, 
 class PathSettings:
     model_dir: Path = Path("model")
     output_dir: Path = Path("outputs")
+    review_dir: Path = Path("outputs/review")
 
 
 @dataclass(slots=True)
@@ -92,6 +93,7 @@ class RuntimeSettings:
     camera_test_mode: bool = False
     camera_test_interval_sec: float = 5.0
     debug_inference: bool = False
+    review_export: bool = False
 
 
 @dataclass(slots=True)
@@ -159,6 +161,7 @@ def _build_runtime_settings(data: dict[str, Any]) -> RuntimeSettings:
         camera_test_mode=_as_bool(data.get("camera_test_mode"), False),
         camera_test_interval_sec=_as_float(data.get("camera_test_interval_sec"), 5.0),
         debug_inference=_as_bool(data.get("debug_inference"), False),
+        review_export=_as_bool(data.get("review_export"), False),
     )
 
 
@@ -180,6 +183,7 @@ def load_config(config_path: Path) -> AppConfig:
         paths=PathSettings(
             model_dir=Path(_as_str(paths_raw.get("model_dir"), "model")),
             output_dir=Path(_as_str(paths_raw.get("output_dir"), "outputs")),
+            review_dir=Path(_as_str(paths_raw.get("review_dir"), "outputs/review")),
         ),
         model_paths={str(key): str(value) for key, value in model_paths.items()},
         camera=_build_camera_settings(camera_raw),

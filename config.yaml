@@ -5,6 +5,7 @@ mode: edge_standalone
 paths:
   model_dir: model
   output_dir: outputs
+  review_dir: ../data/review_queue # file du parent wall-e-core (quand runtime.review_export est actif)
 
 models:
   rubikpi3: best_final_npu.dlc # best.onnx, best_final_npu.dlc or model.eim
@@ -34,3 +35,4 @@ runtime:
   camera_test_mode: true
   camera_test_interval_sec: 5.0
   debug_inference: true
+  review_export: false # true => exporte image brute + bbox vers paths.review_dir (pour wall-e-core)

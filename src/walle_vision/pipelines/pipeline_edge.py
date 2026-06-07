@@ -18,6 +18,8 @@ from ..utils.visualization import draw_detections
 
 
 class EdgeStandalonePipeline:
+    _REVIEW_EMPTY_RESET_FRAMES = 5
+
     def __init__(self, config: AppConfig) -> None:
         self.config = config
         self.camera = CameraStream.create(config.hardware, config.camera_type, config.camera)
@@ -42,6 +44,12 @@ class EdgeStandalonePipeline:
         self.camera_test_dir = self.output_dir / "camera_test"
         if config.runtime.camera_test_mode:
             self.camera_test_dir.mkdir(parents=True, exist_ok=True)
+        self.review_export = config.runtime.review_export
+        self.review_dir = Path(config.config_dir / config.paths.review_dir)
+        if self.review_export:
+            self.review_dir.mkdir(parents=True, exist_ok=True)
+        self._last_review_signature: frozenset[int] | None = None
+        self._review_empty_streak = 0
         self._last_rendered_frame = None
         self._last_test_frame_save_time = 0.0
         self._proc_start_time = 0.0
@@ -106,6 +114,18 @@ class EdgeStandalonePipeline:
                     out_file = self.predict_dir / f"frame_{frame_index:06d}.jpg"
                     cv2.imwrite(str(out_file), annotated)
 
+                if self.review_export:
+                    if raw_detections:
+                        self._review_empty_streak = 0
+                        signature = frozenset(d.class_id for d in raw_detections)
+                        if signature != self._last_review_signature:
+                            self._export_review(frame, raw_detections, frame_index, timestamp)
+                            self._last_review_signature = signature
+                    else:
+                        self._review_empty_streak += 1
+                        if self._review_empty_streak >= self._REVIEW_EMPTY_RESET_FRAMES:
+                            self._last_review_signature = None
+
                 if self._proc_start_time == 0.0:
                     self._proc_start_time = timestamp
                 self._proc_count += 1
@@ -156,3 +176,26 @@ class EdgeStandalonePipeline:
         }
         with self.results_jsonl.open("a", encoding="utf-8") as file:
             file.write(json.dumps(payload, ensure_ascii=True) + os.linesep)
+
+    def _export_review(self, frame, detections: list[Detection], frame_index: int, timestamp: float) -> None:
+        # Dépose une paire <id>.jpg (image VIERGE) + <id>.json pour la file de
+        # validation humaine de wall-e-core (construction du dataset YOLO).
+        item_id = f"frame_{frame_index:06d}_{int(timestamp)}"
+        frame_height, frame_width = frame.shape[:2]
+        sidecar = {
+            "id": item_id,
+            "timestamp": timestamp,
+            "image": {"width": int(frame_width), "height": int(frame_height)},
+            "detections": [
+                {
+                    "class_id": detection.class_id,
+                    "class_name": detection.class_name,
+                    "confidence": round(detection.confidence, 5),
+                    "bbox_xyxy": list(detection.bbox),
+                }
+                for detection in detections
+            ],
+        }
+        cv2.imwrite(str(self.review_dir / f"{item_id}.jpg"), frame)
+        with (self.review_dir / f"{item_id}.json").open("w", encoding="utf-8") as file:
+            json.dump(sidecar, file, ensure_ascii=True)
