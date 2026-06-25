@@ -14,6 +14,7 @@ from ..ai.detector import DetectorConfig, WasteDetector
 from ..config import AppConfig
 from ..core.camera import CameraStream
 from ..types import Detection
+from ..utils.live import MjpegServer, VideoRecorder
 from ..utils.visualization import draw_detections
 
 
@@ -51,9 +52,31 @@ class EdgeStandalonePipeline:
         self._last_review_signature: frozenset[int] | None = None
         self._review_empty_streak = 0
         self._last_rendered_frame = None
+        self._last_detections: list[Detection] = []
         self._last_test_frame_save_time = 0.0
         self._proc_start_time = 0.0
         self._proc_count = 0
+
+        # Live outputs (SSH-friendly): MJPEG stream and/or .mp4 recording.
+        self._stream: MjpegServer | None = None
+        if config.runtime.stream_enabled:
+            self._stream = MjpegServer(
+                config.runtime.stream_host,
+                config.runtime.stream_port,
+                config.runtime.stream_quality,
+            )
+            print(
+                f"MJPEG live stream on http://{config.runtime.stream_host}:{config.runtime.stream_port}/ "
+                "(ouvre l'URL via le port forward VSCode)"
+            )
+        self._recorder: VideoRecorder | None = None
+        if config.runtime.record_enabled:
+            record_path = Path(config.runtime.record_path)
+            if not record_path.is_absolute():
+                record_path = config.config_dir / record_path
+            record_fps = config.runtime.record_fps or config.camera.fps
+            self._recorder = VideoRecorder(record_path, record_fps)
+            print(f"Recording annotated feed to {record_path}")
 
     def run(self) -> None:
         frame_queue: queue.Queue[tuple[int, float, object]] = queue.Queue(maxsize=2)
@@ -96,8 +119,11 @@ class EdgeStandalonePipeline:
                     self._last_test_frame_save_time = timestamp
 
                 if frame_index % self.config.runtime.infer_every_n_frames != 0:
+                    # Frame non inférée : on réutilise les dernières détections pour
+                    # garder un overlay fluide à la cadence caméra.
+                    display_frame = draw_detections(frame, self._last_detections)
+                    self._emit_live(display_frame)
                     if self.config.runtime.show:
-                        display_frame = self._last_rendered_frame if self._last_rendered_frame is not None else frame
                         cv2.imshow("wall-e-vision", display_frame)
                         if cv2.waitKey(1) & 0xFF == ord("q"):
                             stop_event.set()
@@ -109,6 +135,8 @@ class EdgeStandalonePipeline:
 
                 annotated = draw_detections(frame, raw_detections)
                 self._last_rendered_frame = annotated
+                self._last_detections = raw_detections
+                self._emit_live(annotated)
 
                 if raw_detections and frame_index % self.config.runtime.save_every_n_frames == 0:
                     out_file = self.predict_dir / f"frame_{frame_index:06d}.jpg"
@@ -150,8 +178,18 @@ class EdgeStandalonePipeline:
             stop_event.set()
             capture_thread.join(timeout=1.0)
             self.camera.close()
+            if self._recorder is not None:
+                self._recorder.close()
+            if self._stream is not None:
+                self._stream.close()
             if self.config.runtime.show:
                 cv2.destroyAllWindows()
+
+    def _emit_live(self, frame) -> None:
+        if self._stream is not None:
+            self._stream.update(frame)
+        if self._recorder is not None:
+            self._recorder.write(frame)
 
     def _append_result(self, frame_index: int, timestamp: float, detections: list[Detection]) -> None:
         if not detections:

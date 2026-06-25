@@ -17,6 +17,7 @@ camera:
     height: 720
     fps: 30
     warmup_frames: 5
+    rotation: 180 # 0/90/180/270 : redresse la caméra montée à l'envers
 
 detector:
   rubikpi3:
@@ -36,3 +37,12 @@ runtime:
   camera_test_interval_sec: 5.0
   debug_inference: true
   review_export: false # true => exporte image brute + bbox vers paths.review_dir (pour wall-e-core)
+  # Flux live MJPEG dans le navigateur (SSH-friendly, pas besoin de DISPLAY/X11).
+  stream_enabled: true
+  stream_host: 0.0.0.0
+  stream_port: 8080
+  stream_quality: 80
+  # Enregistrement du flux annoté en .mp4.
+  record_enabled: true
+  record_path: outputs/recording.mp4
+  record_fps: 0 # 0 => utilise camera.fps

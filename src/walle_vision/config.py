@@ -72,6 +72,7 @@ class CameraSettings:
     height: int = 640
     fps: int = 30
     warmup_frames: int = 3
+    rotation: int = 0
 
 
 @dataclass(slots=True)
@@ -94,6 +95,13 @@ class RuntimeSettings:
     camera_test_interval_sec: float = 5.0
     debug_inference: bool = False
     review_export: bool = False
+    stream_enabled: bool = False
+    stream_host: str = "0.0.0.0"
+    stream_port: int = 8080
+    stream_quality: int = 80
+    record_enabled: bool = False
+    record_path: str = "outputs/recording.mp4"
+    record_fps: int = 0
 
 
 @dataclass(slots=True)
@@ -134,6 +142,7 @@ def _build_camera_settings(data: dict[str, Any]) -> CameraSettings:
         height=_as_int(data.get("height"), 640),
         fps=_as_int(data.get("fps"), 30),
         warmup_frames=_as_int(data.get("warmup_frames"), 3),
+        rotation=_as_int(data.get("rotation"), 0),
     )
 
 
@@ -162,6 +171,13 @@ def _build_runtime_settings(data: dict[str, Any]) -> RuntimeSettings:
         camera_test_interval_sec=_as_float(data.get("camera_test_interval_sec"), 5.0),
         debug_inference=_as_bool(data.get("debug_inference"), False),
         review_export=_as_bool(data.get("review_export"), False),
+        stream_enabled=_as_bool(data.get("stream_enabled"), False),
+        stream_host=_as_str(data.get("stream_host"), "0.0.0.0"),
+        stream_port=_as_int(data.get("stream_port"), 8080),
+        stream_quality=_as_int(data.get("stream_quality"), 80),
+        record_enabled=_as_bool(data.get("record_enabled"), False),
+        record_path=_as_str(data.get("record_path"), "outputs/recording.mp4"),
+        record_fps=_as_int(data.get("record_fps"), 0),
     )
 
 

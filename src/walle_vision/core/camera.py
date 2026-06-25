@@ -27,6 +27,20 @@ def _load_gstreamer() -> tuple[object | None, object | None]:
 gi, Gst = _load_gstreamer()
 
 
+_ROTATION_CODES = {
+    90: cv2.ROTATE_90_CLOCKWISE,
+    180: cv2.ROTATE_180,
+    270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+}
+
+
+def _rotate_frame(frame: np.ndarray, rotation: int) -> np.ndarray:
+    code = _ROTATION_CODES.get(rotation % 360)
+    if code is None:
+        return frame
+    return cv2.rotate(frame, code)
+
+
 class CameraBackend(Protocol):
     def frames(self) -> Generator[tuple[int, float, np.ndarray], None, None]:
         ...
@@ -48,8 +62,9 @@ class _NullCamera:
 
 
 class _OpenCVCamera:
-    def __init__(self, source: int | str, width: int, height: int, fps: int, warmup_frames: int) -> None:
+    def __init__(self, source: int | str, width: int, height: int, fps: int, warmup_frames: int, rotation: int = 0) -> None:
         self._source = source
+        self._rotation = rotation
         self._backend = cv2.VideoCapture(source, cv2.CAP_V4L2)
         if not self._backend.isOpened():
             self._backend = cv2.VideoCapture(source)
@@ -82,6 +97,7 @@ class _OpenCVCamera:
                 if self._frame_index == 0:
                     raise RuntimeError(f"Unable to read a frame from camera source: {self._source}")
                 break
+            frame = _rotate_frame(frame, self._rotation)
             timestamp = time.time()
             frame_index = self._frame_index
             self._frame_index += 1
@@ -92,10 +108,11 @@ class _OpenCVCamera:
 
 
 class _GStreamerCamera:
-    def __init__(self, source: int | str, width: int, height: int, fps: int, warmup_frames: int) -> None:
+    def __init__(self, source: int | str, width: int, height: int, fps: int, warmup_frames: int, rotation: int = 0) -> None:
         if Gst is None:
             raise RuntimeError("GStreamer Python bindings are not available")
         self._source = source
+        self._rotation = rotation
         if isinstance(source, str) and source.isdigit():
             source = int(source)
         if isinstance(source, int):
@@ -150,6 +167,7 @@ class _GStreamerCamera:
             finally:
                 buffer.unmap(map_info)
 
+            frame = _rotate_frame(frame, self._rotation)
             timestamp = time.time()
             frame_index = self._frame_index
             self._frame_index += 1
@@ -168,9 +186,9 @@ class CameraStream:
         if camera_type == "none":
             backend: CameraBackend = _NullCamera(settings.source)
         elif camera_type == "usb":
-            backend = _OpenCVCamera(settings.source, settings.width, settings.height, settings.fps, settings.warmup_frames)
+            backend = _OpenCVCamera(settings.source, settings.width, settings.height, settings.fps, settings.warmup_frames, settings.rotation)
         else:  # picamera -> CSI camera through the Rubik Pi 3 GStreamer pipeline
-            backend = _GStreamerCamera(settings.source, settings.width, settings.height, settings.fps, settings.warmup_frames)
+            backend = _GStreamerCamera(settings.source, settings.width, settings.height, settings.fps, settings.warmup_frames, settings.rotation)
         return cls(backend)
 
     def frames(self) -> Generator[tuple[int, float, np.ndarray], None, None]:
